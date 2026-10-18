@@ -1,14 +1,5 @@
 name: Tuxora Build
 
-# Builds the self-contained Tuxora desktop APKs:
-#   1. generates bootstraps that already contain the whole desktop stack
-#      (openbox, termux-x11, polybar, thunar, xfce4, geany, netsurf, ...)
-#      for every supported ABI, via scripts/build-tuxora-bootstraps.sh
-#   2. builds one release APK per ABI, each shipping only its own bootstrap
-#      plus the bundled Tuxora dotfiles (assets/tuxora-home.zip)
-#
-# On a `v*` tag push the APKs are attached to a GitHub Release.
-
 on:
   push:
     tags:
@@ -51,53 +42,39 @@ jobs:
             ~/.gradle/wrapper
           key: tuxora-${{ runner.os }}-${{ hashFiles('scripts/build-tuxora-bootstraps.sh') }}
 
-      - name: Generate pre-configured bootstraps (all ABIs)
+      - name: Generate pre-configured bootstrap (arm64 only)
         shell: bash {0}
         run: |
           chmod +x scripts/*.sh scripts/*.py
-          bash scripts/build-tuxora-bootstraps.sh aarch64,arm,i686,x86_64
+          bash scripts/build-tuxora-bootstraps.sh aarch64
 
-      - name: Build full release APKs (per ABI)
-        shell: bash {0}
-        env:
-          TERMUX_PACKAGE_VARIANT: apt-android-7
-          TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS: '1'
-        run: |
-          APK_VERSION_TAG="${GITHUB_REF_NAME:-dev}-github"
-          export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
-          ./gradlew --no-daemon :app:assembleRelease
-
-      - name: Keep full APKs and downloadable desktop assets
+      - name: Save real bootstrap for first-run download
         shell: bash {0}
         run: |
-          mkdir -p dist release-assets
-          cp app/build/outputs/apk/release/*.apk dist/
-          cp app/src/main/cpp/bootstrap-*.zip release-assets/
-          cp app/src/bundled/assets/tuxora-home.zip app/src/bundled/assets/tuxora-home-symlinks.txt release-assets/
-          ls -la dist release-assets
+          mkdir -p release-assets
+          cp app/src/main/cpp/bootstrap-aarch64.zip release-assets/bootstrap-aarch64.zip
 
-      - name: Build slim APKs (desktop downloaded on first run)
+      - name: Build slim arm64-v8a release (bootstrap downloaded on first run)
         shell: bash {0}
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
           TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS: '1'
           TUXORA_SLIM: '1'
+          TUXORA_ABIS: arm64-v8a
         run: |
-          # Replace the bundled bootstraps with tiny placeholders so the slim APKs
-          # stay small; the real desktop is downloaded on first launch.
-          for arch in aarch64 arm i686 x86_64; do
-            python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1],'w').writestr('SYMLINKS.txt','')" "app/src/main/cpp/bootstrap-$arch.zip"
-          done
           ./gradlew --no-daemon :app:clean
+          python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1],'w').writestr('SYMLINKS.txt','')" "app/src/main/cpp/bootstrap-aarch64.zip"
           APK_VERSION_TAG="${GITHUB_REF_NAME:-dev}-github-slim"
           export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
           ./gradlew --no-daemon :app:assembleRelease
 
-      - name: Collect APKs and checksums
+      - name: Collect APKs, bootstraps and checksums
         shell: bash {0}
         run: |
-          cp app/build/outputs/apk/release/*.apk dist/
-          ls -la dist
+          mkdir -p dist release-assets
+          cp app/build/outputs/apk/release/*.apk dist/ 2>/dev/null || true
+          cp app/src/bundled/assets/tuxora-home.zip app/src/bundled/assets/tuxora-home-symlinks.txt release-assets/ 2>/dev/null || true
+          ls -la dist release-assets
           (cd dist && sha256sum *.apk > sha256sums.txt && cat sha256sums.txt)
 
       - name: Upload APK artifacts
@@ -120,6 +97,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/apk/release/sha256sums.txt
+            dist/*.apk
+            dist/sha256sums.txt
+            release-assets/*
+          fail_on_unmatched_files: true
           generate_release_notes: true

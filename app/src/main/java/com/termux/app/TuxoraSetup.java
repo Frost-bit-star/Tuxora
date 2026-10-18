@@ -2,19 +2,21 @@ package com.termux.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.ProgressDialog;
+import android.app.Dialog;
 import android.content.Context;
 import android.os.Build;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.TextView;
 
 import com.termux.BuildConfig;
 import com.termux.R;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -32,9 +34,9 @@ import java.util.zip.ZipInputStream;
  * {@code assets/tuxora-home-symlinks.txt} ({@code <target>←<path>} lines), because Android
  * asset packaging cannot store symbolic links.
  *
- * <p>The slim build does not bundle any of that: it downloads {@code bootstrap-<arch>.zip}
- * and the two {@code tuxora-home.*} files from the GitHub release matching the app version
- * on first launch, then installs them the same way.
+ * <p>The slim build bundles the same dotfiles as the full build (the desktop UI is inbuilt);
+ * only the dependency bootstrap {@code bootstrap-<arch>.zip} is downloaded from the GitHub
+ * release matching the app version on first launch, then installed the same way.
  *
  * <p>Idempotent: a marker file guards the (one time) setup.
  */
@@ -56,7 +58,8 @@ public final class TuxoraSetup {
     /**
      * Prepares the desktop and invokes {@code onReady} on the UI thread once it can be started.
      * For the full build this installs the bundled bootstrap and dotfiles; for the slim build
-     * it downloads them once, showing progress and offering a retry on failure.
+     * the dotfiles are bundled too and only the dependency bootstrap is downloaded once,
+     * showing progress and offering a retry on failure.
      */
     public static void prepare(final Activity activity, final Runnable onReady) {
         final File marker = new File(activity.getFilesDir(), MARKER_NAME);
@@ -88,42 +91,43 @@ public final class TuxoraSetup {
     }
 
     private static void prepareSlim(final Activity activity, final File marker, final Runnable onReady) {
-        final ProgressDialog progress = ProgressDialog.show(activity, null,
-            activity.getString(R.string.bootstrap_installer_body), true, false);
+        final Dialog progress = showSetupScreen(activity);
         new Thread(() -> {
             try {
                 String arch = termuxArch();
                 String base = BuildConfig.TUXORA_RELEASE_BASE_URL + "/v" + BuildConfig.VERSION_NAME;
                 File bootstrapZip = new File(activity.getCacheDir(), "bootstrap-" + arch + ".zip");
-                File homeZip = new File(activity.getCacheDir(), HOME_ZIP);
-                File symlinks = new File(activity.getCacheDir(), HOME_SYMLINKS);
 
+                // Slim = app + dotfiles in the APK; only the dependency stack is downloaded.
                 download(base + "/bootstrap-" + arch + ".zip", bootstrapZip);
-                download(base + "/" + HOME_ZIP, homeZip);
-                download(base + "/" + HOME_SYMLINKS, symlinks);
 
                 activity.runOnUiThread(() -> {
-                    dismiss(progress);
+                    // Keep our setup screen up; TermuxInstaller stacks an identical
+                    // one on top during install, then dismisses only its own. Ours
+                    // stays visible through the home extraction below and is
+                    // dismissed right before the boot sequence continues.
                     TermuxInstaller.installBootstrapFromFile(activity, bootstrapZip, () -> new Thread(() -> {
                         try {
                             File home = homeDir(activity);
-                            try (InputStream zip = new FileInputStream(homeZip)) {
+                            try (InputStream zip = activity.getAssets().open(HOME_ZIP)) {
                                 extractZip(zip, home);
                             }
-                            try (InputStream symlinkStream = new FileInputStream(symlinks)) {
+                            try (InputStream symlinkStream = activity.getAssets().open(HOME_SYMLINKS)) {
                                 createSymlinks(symlinkStream, home);
                             }
                             mark(marker);
-                            Log.i(LOG_TAG, "Downloaded desktop files installed");
+                            Log.i(LOG_TAG, "Bundled desktop files installed");
+                            dismiss(progress);
                             activity.runOnUiThread(onReady);
                         } catch (Exception e) {
-                            Log.e(LOG_TAG, "Failed to install downloaded desktop files", e);
+                            dismiss(progress);
+                            Log.e(LOG_TAG, "Failed to install bundled desktop files", e);
                         }
                     }).start());
                 });
             } catch (Exception e) {
-                dismiss(progress);
-                Log.e(LOG_TAG, "Failed to download desktop files", e);
+                activity.runOnUiThread(() -> dismiss(progress));
+                Log.e(LOG_TAG, "Failed to download desktop dependencies", e);
                 showDownloadError(activity, marker, onReady, e);
             }
         }).start();
@@ -134,7 +138,7 @@ public final class TuxoraSetup {
             try {
                 new AlertDialog.Builder(activity)
                     .setTitle("Desktop download failed")
-                    .setMessage("Tuxora couldn't download the desktop files. Connect to the internet and try again.\n\n" + e.getMessage())
+                    .setMessage("Tuxora couldn't download the desktop dependencies. Connect to the internet and try again.\n\n" + e.getMessage())
                     .setPositiveButton("Retry", (dialog, which) -> {
                         dialog.dismiss();
                         prepare(activity, onReady);
@@ -233,11 +237,42 @@ public final class TuxoraSetup {
         }
     }
 
-    private static void dismiss(ProgressDialog progress) {
+    private static void dismiss(Dialog progress) {
         try {
             progress.dismiss();
         } catch (RuntimeException e) {
             // Activity already dismissed - ignore.
+        }
+    }
+
+    /**
+     * Full-screen first-launch setup screen: the pangolin splash GIF with the
+     * "installing necessary packages" message underneath. Covers download and
+     * install; the caller dismisses it right before the desktop boot continues.
+     */
+    public static Dialog showSetupScreen(final Activity activity) {
+        try {
+            Dialog dialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+            View content = activity.getLayoutInflater().inflate(R.layout.dialog_setup, null);
+            try {
+                ((pl.droidsonroids.gif.GifImageView) content.findViewById(R.id.setup_splash))
+                    .setImageDrawable(new pl.droidsonroids.gif.GifDrawable(activity.getAssets(), "tuxora_splash.gif"));
+            } catch (Exception e) {
+                Log.w(LOG_TAG, "Splash GIF failed to load, continuing without it", e);
+            }
+            ((TextView) content.findViewById(R.id.setup_message))
+                .setText(R.string.bootstrap_installer_body);
+            dialog.setContentView(content);
+            dialog.setCancelable(false);
+            dialog.getWindow().setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+            dialog.show();
+            return dialog;
+        } catch (RuntimeException e) {
+            // Activity already dismissed - fall back to no screen rather than crash.
+            Log.w(LOG_TAG, "Could not show setup screen", e);
+            Dialog fallback = new Dialog(activity);
+            fallback.setTitle("");
+            return fallback;
         }
     }
 

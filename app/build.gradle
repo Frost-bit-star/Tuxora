@@ -5,6 +5,9 @@ plugins {
 // "slim" builds do not bundle the desktop bootstrap or the Tuxora dotfiles;
 // instead they download them once on first launch. Built with TUXORA_SLIM=1.
 def tuxoraSlim = System.getenv("TUXORA_SLIM") == "1"
+// ABIs to build (comma separated). Releases ship arm64 only: TUXORA_ABIS=arm64-v8a.
+def tuxoraAbis = (System.getenv("TUXORA_ABIS") ?: "x86,x86_64,armeabi-v7a,arm64-v8a")
+    .split(",").collect { it.trim() }.findAll { !it.isEmpty() }
 
 ext {
     // The packageVariant defines the bootstrap variant that will be included in the app APK.
@@ -54,6 +57,11 @@ android {
         versionCode 2
         versionName "1.1.0"
 
+        ndk {
+            abiFilters.clear()
+            abiFilters.addAll(tuxoraAbis)
+        }
+
         if (appVersionName) versionName = appVersionName
         validateVersionName(versionName)
 
@@ -83,7 +91,7 @@ android {
                 enable ((gradle.startParameter.taskNames.any { it.contains("Debug") } && splitAPKsForDebugBuilds == "1") ||
                     (gradle.startParameter.taskNames.any { it.contains("Release") } && splitAPKsForReleaseBuilds == "1"))
                 reset ()
-                include 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
+                include(*tuxoraAbis as String[])
                 // A universal APK would carry all four pre-configured bootstraps
                 // (~1GB). Only build it for debug convenience; releases are split
                 // per ABI so each APK ships just its own bootstrap.
@@ -258,19 +266,21 @@ clean {
 
 task downloadBootstraps() {
     doLast {
+        def abiToArch = ['arm64-v8a':'aarch64','armeabi-v7a':'arm','x86':'i686','x86_64':'x86_64']
+        def wantedArches = tuxoraAbis.collect { abiToArch[it] }.findAll { it != null }
         def packageVariant = project.ext.packageVariant
         if (packageVariant == "apt-android-7") {
             def version = "2026.02.12-r1" + "%2B" + "apt.android-7"
-            downloadBootstrap("aarch64", "ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3", version)
-            downloadBootstrap("arm", "a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018", version)
-            downloadBootstrap("i686", "f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b", version)
-            downloadBootstrap("x86_64", "b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a", version)
+            if (wantedArches.contains("aarch64")) downloadBootstrap("aarch64", "ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3", version)
+            if (wantedArches.contains("arm")) downloadBootstrap("arm", "a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018", version)
+            if (wantedArches.contains("i686")) downloadBootstrap("i686", "f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b", version)
+            if (wantedArches.contains("x86_64")) downloadBootstrap("x86_64", "b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a", version)
         } else if (packageVariant == "apt-android-5") {
             def version = "2022.04.28-r6" + "+" + packageVariant
-            downloadBootstrap("aarch64", "913609d439415c828c5640be1b0561467e539cb1c7080662decaaca2fb4820e7", version)
-            downloadBootstrap("arm", "26bfb45304c946170db69108e5eb6e3641aad751406ce106c80df80cad2eccf8", version)
-            downloadBootstrap("i686", "46dcfeb5eef67ba765498db9fe4c50dc4690805139aa0dd141a9d8ee0693cd27", version)
-            downloadBootstrap("x86_64", "615b590679ee6cd885b7fd2ff9473c845e920f9b422f790bb158c63fe42b8481", version)
+            if (wantedArches.contains("aarch64")) downloadBootstrap("aarch64", "913609d439415c828c5640be1b0561467e539cb1c7080662decaaca2fb4820e7", version)
+            if (wantedArches.contains("arm")) downloadBootstrap("arm", "26bfb45304c946170db69108e5eb6e3641aad751406ce106c80df80cad2eccf8", version)
+            if (wantedArches.contains("i686")) downloadBootstrap("i686", "46dcfeb5eef67ba765498db9fe4c50dc4690805139aa0dd141a9d8ee0693cd27", version)
+            if (wantedArches.contains("x86_64")) downloadBootstrap("x86_64", "615b590679ee6cd885b7fd2ff9473c845e920f9b422f790bb158c63fe42b8481", version)
         } else {
             throw new GradleException("Unsupported TERMUX_PACKAGE_VARIANT \"" + packageVariant + "\"")
         }

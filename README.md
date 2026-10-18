@@ -82,6 +82,7 @@ The desktop boots straight into **Openbox + Polybar + Rofi** with the Tuxora the
 - **Terminal:** `xfce4-terminal` (also `vim`, `nano`, `htop`, `ranger`, `ncmpcpp`, `mutt`...).
 - **Files:** `thunar`.
 - **Browser:** `netsurf-gtk3`.
+- **Music / video:** `audacious` (audio, with its own UI — files open to it from Thunar) and `mpv` (video).
 - **Launcher:** click the menu icon on the bar, or press `W-p` / `A-F1` to open **Rofi**.
 - **Right-click on the desktop** for the full Openbox menu (Preferences, Keybinds, Places, Recent Files, Exit...).
 
@@ -161,6 +162,36 @@ Here are some shortcut keys you can use to speed up your work. For more, `Right 
 | `W-f` | File Manager |  | `W-e` | Text Editor |
 | `W-f`/`W-t` | Terminal |  | `W-b` | Web Browser |
 | `W-Space` | Openbox Menu |  | `W-q` | Close Window |
+
+### Performance
+
+The Rofi launcher opens in **under a second** on tested hardware and the desktop stays
+smooth while you work. What keeps it fast — and what to check if it ever feels slow:
+
+- **Opaque launcher window.** The menu is fully opaque (`background: #111111FF`,
+  `transparency: "none"`). A full-screen *transparent* window forces `xcompmgr` to
+  re-blend the entire screen in software on every frame — that one setting turns a
+  snappy menu into a laggy one. Keep the background opaque if you re-theme.
+- **No input-grab contention.** The launcher starts `rofi` without `-no-lazy-grab`, so
+  it never fights the compositor for the input grab (the cause of the occasional dead
+  keypress right after opening the menu).
+- **A real, cached icon theme.** With `show-icons` on, the configured icon theme must
+  actually be installed. `papirus-icon-theme` ships in the bootstrap, so lookups hit
+  `icon-theme.cache`; with the theme missing, rofi walks fallback directories for every
+  app entry on every open. Re-theming to a different `icon-theme`? Install it first.
+- **Compositor is optional.** `xcompmgr` provides window shadows/alpha but costs CPU.
+  Toggle it from the desktop right-click menu (`ob-compositor --stop` / `--start`) if
+  you need maximum CPU for a heavy compile. Trade-off: Android only composites the X
+  server's *single* surface — it does not layer individual X windows — so with the
+  compositor off you lose shadows/alpha and uncovered windows can show redraw
+  artifacts. The launcher stays fast either way now that its window is opaque.
+- **GPU drivers don't affect the 2D desktop.** Rofi/Polybar/Thunar draw through
+  Xrender/Cairo — that path never touches OpenGL. For heavy *OpenGL* apps you can try
+  routing mesa through Vulkan with `MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink`,
+  but only on devices with a usable Vulkan driver — e.g. Adreno GPUs via the Turnip
+  (KGSL) driver. Mali devices (like the tested Redmi Note-class MT6768) have no Termux
+  Turnip build, so mesa falls back to `swrast` there. This is a per-app opt-in, not a
+  desktop-wide switch.
 
 ### Troubleshooting
 

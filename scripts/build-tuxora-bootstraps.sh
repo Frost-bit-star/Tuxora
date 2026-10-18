@@ -32,7 +32,8 @@ thunar,geany,gtk2,gtk3,imagemagick,xfce4-settings,xfce4-terminal,exo,netsurf,\
 ranger,vim,nano,htop,ncmpcpp,mpc,mpd,mutt,elinks,mpv-x,neofetch,calcurse,bmon,\
 calc,bc,fsmon,l3afpad,xarchiver,xcompmgr,xmlstarlet,xorg-font-util,xorg-xrdb,\
 fontconfig-utils,desktop-file-utils,startup-notification,xbitmaps,jq,wget,\
-openssl-tool,git,zsh,pulseaudio,termux-api"
+openssl-tool,git,zsh,pulseaudio,termux-api,\
+audacious,audacious-plugins,papirus-icon-theme"
 
 mkdir -p "$WORK"
 

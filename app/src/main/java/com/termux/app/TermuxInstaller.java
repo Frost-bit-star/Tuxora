@@ -2,7 +2,6 @@ package com.termux.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.ProgressDialog;
 import android.content.Context;
 import android.os.Build;
 import android.os.Environment;
@@ -139,7 +138,7 @@ final class TermuxInstaller {
     }
 
     private static void runInstaller(final Activity activity, final ZipSupplier zipSupplier, final Runnable whenDone) {
-        final ProgressDialog progress = ProgressDialog.show(activity, null, activity.getString(R.string.bootstrap_installer_body), true, false);
+        final android.app.Dialog progress = TuxoraSetup.showSetupScreen(activity);
         new Thread() {
             @Override
             public void run() {
