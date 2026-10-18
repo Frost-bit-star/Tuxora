@@ -34,7 +34,7 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: Install Android NDK
         run: sdkmanager --install "ndk;29.0.14206865" && echo "y" | sdkmanager --licenses || true
