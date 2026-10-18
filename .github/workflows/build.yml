@@ -33,11 +33,13 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android NDK
-        run: sdkmanager --install "ndk;29.0.14206865" && echo "y" | sdkmanager --licenses || true
+        shell: bash {0}
+        run: |
+          SDKMANAGER="$(dirname "$(command -v sdkmanager)")/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="${ANDROID_SDK_ROOT:-$ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          yes | "$SDKMANAGER" --install "ndk;29.0.14206865"
 
       - name: Cache termux-packages + Gradle
         uses: actions/cache@v4
