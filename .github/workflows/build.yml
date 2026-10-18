@@ -57,7 +57,7 @@ jobs:
           chmod +x scripts/*.sh scripts/*.py
           bash scripts/build-tuxora-bootstraps.sh aarch64,arm,i686,x86_64
 
-      - name: Build release APKs (per ABI)
+      - name: Build full release APKs (per ABI)
         shell: bash {0}
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
@@ -67,20 +67,46 @@ jobs:
           export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
           ./gradlew --no-daemon :app:assembleRelease
 
+      - name: Keep full APKs and downloadable desktop assets
+        shell: bash {0}
+        run: |
+          mkdir -p dist release-assets
+          cp app/build/outputs/apk/release/*.apk dist/
+          cp app/src/main/cpp/bootstrap-*.zip release-assets/
+          cp app/src/bundled/assets/tuxora-home.zip app/src/bundled/assets/tuxora-home-symlinks.txt release-assets/
+          ls -la dist release-assets
+
+      - name: Build slim APKs (desktop downloaded on first run)
+        shell: bash {0}
+        env:
+          TERMUX_PACKAGE_VARIANT: apt-android-7
+          TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS: '1'
+          TUXORA_SLIM: '1'
+        run: |
+          # Replace the bundled bootstraps with tiny placeholders so the slim APKs
+          # stay small; the real desktop is downloaded on first launch.
+          for arch in aarch64 arm i686 x86_64; do
+            python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1],'w').writestr('SYMLINKS.txt','')" "app/src/main/cpp/bootstrap-$arch.zip"
+          done
+          ./gradlew --no-daemon :app:clean
+          APK_VERSION_TAG="${GITHUB_REF_NAME:-dev}-github-slim"
+          export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
+          ./gradlew --no-daemon :app:assembleRelease
+
       - name: Collect APKs and checksums
         shell: bash {0}
         run: |
-          APK_DIR="./app/build/outputs/apk/release"
-          ls -la "$APK_DIR"
-          (cd "$APK_DIR" && sha256sum *.apk > sha256sums.txt && cat sha256sums.txt)
+          cp app/build/outputs/apk/release/*.apk dist/
+          ls -la dist
+          (cd dist && sha256sum *.apk > sha256sums.txt && cat sha256sums.txt)
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tuxora-apks
           path: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/apk/release/sha256sums.txt
+            dist/*.apk
+            dist/sha256sums.txt
           if-no-files-found: error
 
       - name: Delete existing release for this tag

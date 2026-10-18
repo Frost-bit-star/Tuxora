@@ -61,8 +61,41 @@ final class TermuxInstaller {
 
     private static final String LOG_TAG = "TermuxInstaller";
 
+    /** Supplier of the bootstrap zip stream. */
+    interface ZipSupplier {
+        java.io.InputStream get() throws Exception;
+    }
+
     /** Performs bootstrap setup if necessary. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
+        if (!validateEnvironment(activity)) return;
+
+        // If prefix directory exists, even if its a symlink to a valid directory and symlink is not broken/dangling
+        if (FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) {
+            if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
+                Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" exists but is empty or only contains specific unimportant files.");
+            } else {
+                whenDone.run();
+                return;
+            }
+        } else if (FileUtils.fileExists(TERMUX_PREFIX_DIR_PATH, false)) {
+            Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" does not exist but another file exists at its destination.");
+        }
+
+        runInstaller(activity, () -> new ByteArrayInputStream(loadZipBytes()), whenDone);
+    }
+
+    /**
+     * Unconditionally (re)installs the bootstrap from the given zip file. Used by the slim
+     * build, which downloads the desktop bootstrap on first launch instead of bundling it.
+     */
+    static void installBootstrapFromFile(final Activity activity, final File zipFile, final Runnable whenDone) {
+        if (!validateEnvironment(activity)) return;
+        runInstaller(activity, () -> new java.io.FileInputStream(zipFile), whenDone);
+    }
+
+    /** Validates the environment, returning {@code false} after showing an error if unusable. */
+    private static boolean validateEnvironment(final Activity activity) {
         String bootstrapErrorMessage;
         Error filesDirectoryAccessibleError;
 
@@ -82,7 +115,7 @@ final class TermuxInstaller {
             MessageDialogUtils.exitAppWithErrorMessage(activity,
                 activity.getString(R.string.bootstrap_error_title),
                 bootstrapErrorMessage);
-            return;
+            return false;
         }
 
         if (!isFilesDirectoryAccessible) {
@@ -99,21 +132,13 @@ final class TermuxInstaller {
             MessageDialogUtils.showMessage(activity,
                 activity.getString(R.string.bootstrap_error_title),
                 bootstrapErrorMessage, null);
-            return;
+            return false;
         }
 
-        // If prefix directory exists, even if its a symlink to a valid directory and symlink is not broken/dangling
-        if (FileUtils.directoryFileExists(TERMUX_PREFIX_DIR_PATH, true)) {
-            if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
-                Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" exists but is empty or only contains specific unimportant files.");
-            } else {
-                whenDone.run();
-                return;
-            }
-        } else if (FileUtils.fileExists(TERMUX_PREFIX_DIR_PATH, false)) {
-            Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" does not exist but another file exists at its destination.");
-        }
+        return true;
+    }
 
+    private static void runInstaller(final Activity activity, final ZipSupplier zipSupplier, final Runnable whenDone) {
         final ProgressDialog progress = ProgressDialog.show(activity, null, activity.getString(R.string.bootstrap_installer_body), true, false);
         new Thread() {
             @Override
@@ -156,8 +181,7 @@ final class TermuxInstaller {
                     final byte[] buffer = new byte[8096];
                     final List<Pair<String, String>> symlinks = new ArrayList<>(50);
 
-                    final byte[] zipBytes = loadZipBytes();
-                    try (ZipInputStream zipInput = new ZipInputStream(new ByteArrayInputStream(zipBytes))) {
+                    try (ZipInputStream zipInput = new ZipInputStream(zipSupplier.get())) {
                         ZipEntry zipEntry;
                         while ((zipEntry = zipInput.getNextEntry()) != null) {
                             if (zipEntry.getName().equals("SYMLINKS.txt")) {

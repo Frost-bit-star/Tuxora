@@ -305,14 +305,11 @@ public class DesktopActivity extends Activity {
         // Install the bundled Termux prefix (which already contains the whole
         // desktop stack) and the bundled Tuxora $HOME files before starting X,
         // so a fresh install boots straight into the configured desktop.
-        TermuxInstaller.setupBootstrapIfNeeded(this, () -> new Thread(() -> {
-            TuxoraSetup.setupIfNeeded(DesktopActivity.this);
-            main.post(() -> {
-                launchDesktopRenderer();
-                startXServer();
-                finish();
-            });
-        }).start());
+        TuxoraSetup.prepare(this, () -> {
+            launchDesktopRenderer();
+            startXServer();
+            finish();
+        });
     }
 
     private void acquireWakeLock() {
