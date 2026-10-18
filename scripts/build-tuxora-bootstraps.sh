@@ -59,11 +59,26 @@ BUILD_DIR="$WORK/out"
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"
 
-echo "[*] Generating bootstraps for: $ARCHS"
-"$WORK/termux-packages/scripts/generate-bootstraps.sh" \
-    --architectures "$ARCHS" \
-    --repository "http://127.0.0.1:$PORT" \
-    --add "$TUXORA_EXTRA_PACKAGES"
+# Skip architectures whose bootstrap already exists (e.g. restored from the CI
+# cache), so only missing ABI(s) are regenerated.
+TODO=""
+for arch in $(echo "$ARCHS" | tr ',' ' '); do
+    if [ -s "$BUILD_DIR/bootstrap-$arch.zip" ]; then
+        echo "[*] Reusing cached bootstrap-$arch.zip"
+    else
+        TODO="${TODO:+$TODO,}$arch"
+    fi
+done
+
+if [ -n "$TODO" ]; then
+    echo "[*] Generating bootstraps for: $TODO"
+    "$WORK/termux-packages/scripts/generate-bootstraps.sh" \
+        --architectures "$TODO" \
+        --repository "http://127.0.0.1:$PORT" \
+        --add "$TUXORA_EXTRA_PACKAGES"
+else
+    echo "[*] All bootstraps already present, skipping generation."
+fi
 
 echo "[*] Copying archives to $OUT_DIR ..."
 mkdir -p "$OUT_DIR"

@@ -46,6 +46,7 @@ jobs:
         with:
           path: |
             /tmp/tuxora-bootstrap/termux-packages
+            /tmp/tuxora-bootstrap/out
             ~/.gradle/caches
             ~/.gradle/wrapper
           key: tuxora-${{ runner.os }}-${{ hashFiles('scripts/build-tuxora-bootstraps.sh') }}
@@ -60,7 +61,7 @@ jobs:
         shell: bash {0}
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
-          splitAPKsForReleaseBuilds: '1'
+          TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS: '1'
         run: |
           APK_VERSION_TAG="${GITHUB_REF_NAME:-dev}-github"
           export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
@@ -81,6 +82,12 @@ jobs:
             app/build/outputs/apk/release/*.apk
             app/build/outputs/apk/release/sha256sums.txt
           if-no-files-found: error
+
+      - name: Delete existing release for this tag
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete "$GITHUB_REF_NAME" --yes --cleanup-tag=false || true
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
