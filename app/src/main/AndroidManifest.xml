@@ -47,16 +47,18 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="false"
         android:theme="@style/Theme.TermuxApp.DayNight.DarkActionBar"
+        tools:replace="android:name, android:label, android:icon, android:roundIcon, android:theme"
         tools:targetApi="m">
 
+        <!-- Primary launcher: boots straight into the landscape Tuxora desktop. -->
         <activity
-            android:name=".app.TermuxActivity"
+            android:name=".app.DesktopActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|smallestScreenSize|density|screenLayout|keyboard|keyboardHidden|navigation"
-            android:label="@string/application_name"
+            android:label="Tuxora"
             android:launchMode="singleTask"
-            android:resizeableActivity="true"
-            android:theme="@style/Theme.TermuxActivity.DayNight.NoActionBar"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.Tuxora.Login"
+            android:windowSoftInputMode="adjustPan"
             tools:targetApi="n">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -68,6 +70,20 @@
 
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <!-- Secondary terminal: NOT a launcher (avoids a second icon / terminal flash).
+             Reachable from the desktop via notification action, shortcut, or
+             `am start`. -->
+        <activity
+            android:name=".app.TermuxActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|density|screenLayout|keyboard|keyboardHidden|navigation"
+            android:label="Tuxora Terminal"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.TermuxActivity.DayNight.NoActionBar"
+            tools:targetApi="n">
 
             <meta-data
                 android:name="android.app.shortcuts"
@@ -221,10 +237,13 @@
             android:name="com.samsung.android.keepalive.density"
             android:value="true" />
 
-        <!-- Version >= 3.0. DeX Dual Mode support -->
+        <!-- Version >= 3.0. DeX Dual Mode support. Termux wants keep_process_alive=true;
+             termux-x11's merged manifest says false (its own separate-process concern);
+             in this single-process build Termux's value applies. -->
         <meta-data
             android:name="com.samsung.android.multidisplay.keep_process_alive"
-            android:value="true" />
+            android:value="true"
+            tools:replace="android:value" />
 
         <meta-data
             android:name="com.sec.android.support.multiwindow"

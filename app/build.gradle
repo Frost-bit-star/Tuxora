@@ -36,15 +36,19 @@ android {
         implementation "io.noties.markwon:recycler:$markwonVersion"
         implementation 'com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava'
 
+        // Animated pangolin splash GIF (bundled in assets, shown before login).
+        implementation "pl.droidsonroids.gif:android-gif-drawable:1.2.29"
+
         implementation project(":terminal-view")
         implementation project(":termux-shared")
+        implementation project(":lorie")
     }
 
     defaultConfig {
         minSdkVersion project.properties.minSdkVersion.toInteger()
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
-        versionCode 118
-        versionName "0.118.0"
+        versionCode 1
+        versionName "1.0.0"
 
         if (appVersionName) versionName = appVersionName
         validateVersionName(versionName)
@@ -72,7 +76,10 @@ android {
                     (gradle.startParameter.taskNames.any { it.contains("Release") } && splitAPKsForReleaseBuilds == "1"))
                 reset ()
                 include 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
-                universalApk true
+                // A universal APK would carry all four pre-configured bootstraps
+                // (~1GB). Only build it for debug convenience; releases are split
+                // per ABI so each APK ships just its own bootstrap.
+                universalApk (gradle.startParameter.taskNames.any { it.contains("Debug") })
             }
         }
     }
@@ -89,8 +96,10 @@ android {
     buildTypes {
         release {
             minifyEnabled true
-            shrinkResources false // Reproducible builds
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Signed with the bundled debug key (no secret needed in CI).
+            signingConfig signingConfigs.debug
         }
 
         debug {
@@ -124,7 +133,9 @@ android {
 
     packagingOptions {
         jniLibs {
-            useLegacyPackaging true
+            // Must be false: termux-x11's Loader runs in app_process and dlopens libXlorie.so
+            // straight from base.apk, which only works with uncompressed native libs.
+            useLegacyPackaging false
         }
     }
 
@@ -169,6 +180,18 @@ def downloadBootstrap(String arch, String expectedChecksum, String version) {
 
     def localUrl = "src/main/cpp/bootstrap-" + arch + ".zip"
     def file = new File(projectDir, localUrl)
+
+    // Tuxora ships custom bootstraps that already contain the whole desktop
+    // stack (openbox, termux-x11, ...). They intentionally do not match the
+    // upstream termux-packages checksums, so an existing local archive is used
+    // as-is. Set TERMUX_FORCE_BOOTSTRAP_DOWNLOAD=true to restore the upstream
+    // verify-or-download behaviour.
+    def forceDownload = System.getenv("TERMUX_FORCE_BOOTSTRAP_DOWNLOAD") == "true"
+    if (file.exists() && file.length() > 0 && !forceDownload) {
+        logger.quiet("Using bundled bootstrap: " + localUrl)
+        return
+    }
+
     if (file.exists()) {
         def buffer = new byte[8192]
         def input = new FileInputStream(file)

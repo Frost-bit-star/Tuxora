@@ -1,1 +1,9 @@
 include ':app', ':termux-shared', ':terminal-emulator', ':terminal-view'
+
+// Native X11 server (Lorie) + shell loader, integrated from termux-x11.
+// `:lorie` auto-detects `:app` as its host and sets BuildConfig.APPLICATION_ID to com.termux.
+// `:lorie-app` from upstream is intentionally NOT included: `:app` is the application shell.
+include ':lorie', ':shell-loader', ':shell-loader:stub'
+project(':lorie').projectDir = file('third_party/termux-x11/lorie')
+project(':shell-loader').projectDir = file('third_party/termux-x11/shell-loader')
+project(':shell-loader:stub').projectDir = file('third_party/termux-x11/shell-loader/stub')

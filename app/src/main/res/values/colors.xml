@@ -1,3 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <color name="tuxora_white">#FFFFFFFF</color>
+    <color name="tuxora_text_grey">#B3B3B3</color>
+    <color name="tuxora_error">#FF5252</color>
 </resources>

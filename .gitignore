@@ -10,6 +10,9 @@ release/
 .externalNativeBuild
 .cxx
 *.zip
+# Vendored Tuxora desktop files (see scripts/make-tuxora-home.py). Bootstraps
+# in app/src/main/cpp stay ignored because the CI generates them.
+!app/src/main/assets/tuxora-home.zip
 
 # Local configuration file (sdk path, etc)
 local.properties

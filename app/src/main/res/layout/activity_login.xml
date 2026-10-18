@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Native Tuxora login: pangolin splash cross-fades into a minimal sign-in on one background. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_wallpaper_subtle"
+    android:fitsSystemWindows="true">
+
+    <!-- Top bar with clock -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="#66000000"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingLeft="16dp"
+        android:paddingTop="6dp"
+        android:paddingRight="16dp"
+        android:paddingBottom="6dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tuxora"
+            android:textColor="#E0E0E0"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
+
+        <TextView
+            android:id="@+id/clock_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#B3B3B3"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <!-- Pangolin splash (shown first, then faded out) -->
+    <pl.droidsonroids.gif.GifImageView
+        android:id="@+id/splash_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#101010"
+        android:scaleType="centerCrop" />
+
+    <!-- Login content: one background, no card -->
+    <LinearLayout
+        android:id="@+id/login_content"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:alpha="0"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:paddingLeft="32dp"
+        android:paddingRight="32dp"
+        android:visibility="invisible">
+
+        <!-- Small avatar with neutral ring -->
+        <FrameLayout
+            android:layout_width="72dp"
+            android:layout_height="72dp"
+            android:layout_marginBottom="14dp">
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:background="@drawable/bg_avatar_ring" />
+
+            <ImageView
+                android:id="@+id/avatar_image"
+                android:layout_width="64dp"
+                android:layout_height="64dp"
+                android:layout_gravity="center"
+                android:background="#1A1A1A"
+                android:clickable="true"
+                android:contentDescription="Change profile picture"
+                android:focusable="true"
+                android:scaleType="centerCrop" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/display_name"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="u0_a0"
+            android:textColor="#E0E0E0"
+            android:textSize="16sp" />
+
+        <!-- Password row (only when a password is set) -->
+        <LinearLayout
+            android:id="@+id/password_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:background="@drawable/bg_password_field"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingLeft="14dp"
+            android:paddingTop="4dp"
+            android:paddingRight="6dp"
+            android:paddingBottom="4dp"
+            android:visibility="gone">
+
+            <EditText
+                android:id="@+id/password_input"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:background="@null"
+                android:hint="Password"
+                android:imeOptions="actionDone"
+                android:inputType="textPassword"
+                android:maxLength="128"
+                android:singleLine="true"
+                android:textColor="#FFFFFF"
+                android:textColorHint="#808080"
+                android:textSize="15sp" />
+
+            <ImageButton
+                android:id="@+id/toggle_password"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Show password"
+                android:src="@drawable/ic_eye" />
+
+            <ImageButton
+                android:id="@+id/login_button"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_submit_circle"
+                android:contentDescription="Log in"
+                android:src="@drawable/ic_arrow_forward" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/error_text"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:textColor="@color/tuxora_error"
+            android:textSize="13sp"
+            android:visibility="gone" />
+
+        <!-- Sign-up column (only when no password is set) -->
+        <LinearLayout
+            android:id="@+id/signup_column"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <Button
+                android:id="@+id/signup_button"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
+                android:background="@drawable/bg_signup_pill"
+                android:paddingLeft="40dp"
+                android:paddingRight="40dp"
+                android:text="Sign in"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

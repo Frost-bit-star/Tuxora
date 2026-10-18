@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Neutral frosted ring (white -> grey) drawn behind the circular avatar. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <gradient
+        android:angle="45"
+        android:startColor="#F2F2F2"
+        android:endColor="#7A7A7A" />
+    <size
+        android:width="120dp"
+        android:height="120dp" />
+</shape>

@@ -15,6 +15,16 @@
     <style name="Theme.TermuxApp.DayNight.NoActionBar" parent="Theme.BaseActivity.DayNight.NoActionBar"/>
 
 
+    <!-- Tuxora login/splash: neutral system bars (no brand colour). -->
+    <style name="Theme.Tuxora.Login" parent="Theme.TermuxApp.DayNight.NoActionBar">
+        <item name="colorPrimary">#1A1A1A</item>
+        <item name="colorPrimaryVariant">#0F0F0F</item>
+        <item name="colorSecondary">#FFFFFF</item>
+        <item name="android:statusBarColor">#0F0F0F</item>
+        <item name="android:navigationBarColor">#0F0F0F</item>
+        <item name="android:windowBackground">@drawable/bg_wallpaper_subtle</item>
+    </style>
+
     <!-- TermuxActivity DayNight NoActionBar theme. -->
     <style name="Theme.TermuxActivity.DayNight.NoActionBar" parent="Theme.TermuxApp.DayNight.NoActionBar">
         <!-- Primary brand color. -->
