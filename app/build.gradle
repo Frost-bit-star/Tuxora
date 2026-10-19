@@ -97,11 +97,10 @@ android {
 
     sourceSets {
         main {
-            // The full build bundles the original Tuxora dotfiles (themes, icons,
-            // fonts, Music, ...). The slim build downloads them on first launch.
-            if (!tuxoraSlim) {
-                assets.srcDirs = assets.srcDirs + [file('src/bundled/assets')]
-            }
+            // The original Tuxora dotfiles (themes, icons, fonts, Music, ...)
+            // are bundled in every build. Only the dependency bootstrap is
+            // downloaded by the slim build on first launch.
+            assets.srcDirs = assets.srcDirs + [file('src/bundled/assets')]
         }
     }
 
@@ -208,9 +207,20 @@ def downloadBootstrap(String arch, String expectedChecksum, String version) {
     // as-is. Set TERMUX_FORCE_BOOTSTRAP_DOWNLOAD=true to restore the upstream
     // verify-or-download behaviour.
     def forceDownload = System.getenv("TERMUX_FORCE_BOOTSTRAP_DOWNLOAD") == "true"
+    def tuxoraSlimLocal = System.getenv("TUXORA_SLIM") == "1"
     if (file.exists() && file.length() > 0 && !forceDownload) {
         logger.quiet("Using bundled bootstrap: " + localUrl)
         return
+    }
+
+    // A non-slim (self-contained) build MUST embed the Tuxora desktop bootstrap.
+    // The upstream archive only contains the base Termux system (no termux-x11,
+    // openbox, ...), so downloading it would produce an APK whose desktop can
+    // never start. Fail loudly instead of silently shipping a broken build.
+    if (!tuxoraSlimLocal && !forceDownload) {
+        throw new GradleException("Missing Tuxora bootstrap '" + localUrl +
+            "'. Generate it with 'bash scripts/build-tuxora-bootstraps.sh " + arch +
+            "', or build a slim APK with TUXORA_SLIM=1 (which downloads the bootstrap on first run).")
     }
 
     if (file.exists()) {

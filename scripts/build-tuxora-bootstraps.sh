@@ -81,6 +81,40 @@ else
     echo "[*] All bootstraps already present, skipping generation."
 fi
 
+# Replace the stock Termux login banner with the Tuxora one, so a fresh install
+# greets the user with Tuxora branding in both Termux sessions and the desktop
+# terminal (via the ~/.bashrc shipped in the dotfiles archive).
+MOTD_DIR="$WORK/motd"
+mkdir -p "$MOTD_DIR/etc"
+cp -f "$REPO_ROOT/scripts/tuxora-motd.txt" "$MOTD_DIR/etc/motd"
+for arch in $(echo "$ARCHS" | tr ',' ' '); do
+    if [ -f "$BUILD_DIR/bootstrap-$arch.zip" ]; then
+        (cd "$MOTD_DIR" && zip -q "$BUILD_DIR/bootstrap-$arch.zip" etc/motd)
+        echo "[*] Injected Tuxora motd into bootstrap-$arch.zip"
+    fi
+done
+
+# The audacious-plugins package ships a PipeWire output plugin. Tuxora runs
+# PulseAudio (Android AAudio via OpenSL), and there is no PipeWire server, so
+# audacious picks the PipeWire plugin by default and fails with
+# "PipeWireOutput: unable to connect context". Rename the plugin inside each
+# bootstrap so audacious falls back to its PulseAudio output.
+for arch in $(echo "$ARCHS" | tr ',' ' '); do
+    zip_file="$BUILD_DIR/bootstrap-$arch.zip"
+    [ -f "$zip_file" ] || continue
+    pipewire_entry="$(unzip -Z1 "$zip_file" 2>/dev/null \
+        | grep -m1 'lib/audacious/Output/pipewire\.so$' || true)"
+    if [ -n "$pipewire_entry" ]; then
+        tmp_dir="$(mktemp -d)"
+        (cd "$tmp_dir" && unzip -q -o "$zip_file" "$pipewire_entry" \
+            && mv "$pipewire_entry" "$pipewire_entry.disabled" \
+            && zip -q -d "$zip_file" "$pipewire_entry" >/dev/null 2>&1 || true \
+            && zip -q "$zip_file" "$pipewire_entry.disabled")
+        rm -rf "$tmp_dir"
+        echo "[*] Disabled PipeWire output plugin in bootstrap-$arch.zip"
+    fi
+done
+
 echo "[*] Copying archives to $OUT_DIR ..."
 mkdir -p "$OUT_DIR"
 for arch in $(echo "$ARCHS" | tr ',' ' '); do

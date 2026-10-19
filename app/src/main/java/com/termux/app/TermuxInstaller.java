@@ -26,9 +26,16 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -65,6 +72,11 @@ final class TermuxInstaller {
         java.io.InputStream get() throws Exception;
     }
 
+    /** Progress sink for the bootstrap install; called from a background thread. */
+    interface InstallProgress {
+        void onProgress(int percent, String message);
+    }
+
     /** Performs bootstrap setup if necessary. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
         if (!validateEnvironment(activity)) return;
@@ -81,7 +93,7 @@ final class TermuxInstaller {
             Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" does not exist but another file exists at its destination.");
         }
 
-        runInstaller(activity, () -> new ByteArrayInputStream(loadZipBytes()), whenDone);
+        runInstaller(activity, null, () -> new ByteArrayInputStream(loadZipBytes()), null, whenDone);
     }
 
     /**
@@ -89,8 +101,17 @@ final class TermuxInstaller {
      * build, which downloads the desktop bootstrap on first launch instead of bundling it.
      */
     static void installBootstrapFromFile(final Activity activity, final File zipFile, final Runnable whenDone) {
+        installBootstrapFromFile(activity, zipFile, null, whenDone);
+    }
+
+    /**
+     * Same as {@link #installBootstrapFromFile(Activity, File, Runnable)} but reports
+     * extraction progress and lets the caller own the UI (no dialog is created here).
+     */
+    static void installBootstrapFromFile(final Activity activity, final File zipFile,
+                                         final InstallProgress progress, final Runnable whenDone) {
         if (!validateEnvironment(activity)) return;
-        runInstaller(activity, () -> new java.io.FileInputStream(zipFile), whenDone);
+        runInstaller(activity, zipFile, null, progress, whenDone);
     }
 
     /** Validates the environment, returning {@code false} after showing an error if unusable. */
@@ -137,8 +158,10 @@ final class TermuxInstaller {
         return true;
     }
 
-    private static void runInstaller(final Activity activity, final ZipSupplier zipSupplier, final Runnable whenDone) {
-        final android.app.Dialog progress = TuxoraSetup.showSetupScreen(activity);
+    private static void runInstaller(final Activity activity, final File zipFile, final ZipSupplier zipSupplier,
+                                     final InstallProgress installProgress, final Runnable whenDone) {
+        // When a progress sink is provided the caller owns the UI; otherwise show our own screen.
+        final android.app.Dialog progress = (installProgress == null) ? TuxoraSetup.showSetupScreen(activity) : null;
         new Thread() {
             @Override
             public void run() {
@@ -176,55 +199,14 @@ final class TermuxInstaller {
                     }
 
                     Logger.logInfo(LOG_TAG, "Extracting bootstrap zip to prefix staging directory \"" + TERMUX_STAGING_PREFIX_DIR_PATH + "\".");
+                    if (installProgress != null) installProgress.onProgress(55, "Installing packages\u2026");
 
-                    final byte[] buffer = new byte[8096];
                     final List<Pair<String, String>> symlinks = new ArrayList<>(50);
 
-                    try (ZipInputStream zipInput = new ZipInputStream(zipSupplier.get())) {
-                        ZipEntry zipEntry;
-                        while ((zipEntry = zipInput.getNextEntry()) != null) {
-                            if (zipEntry.getName().equals("SYMLINKS.txt")) {
-                                BufferedReader symlinksReader = new BufferedReader(new InputStreamReader(zipInput));
-                                String line;
-                                while ((line = symlinksReader.readLine()) != null) {
-                                    String[] parts = line.split("←");
-                                    if (parts.length != 2)
-                                        throw new RuntimeException("Malformed symlink line: " + line);
-                                    String oldPath = parts[0];
-                                    String newPath = TERMUX_STAGING_PREFIX_DIR_PATH + "/" + parts[1];
-                                    symlinks.add(Pair.create(oldPath, newPath));
-
-                                    error = ensureDirectoryExists(new File(newPath).getParentFile());
-                                    if (error != null) {
-                                        showBootstrapErrorDialog(activity, whenDone, Error.getErrorMarkdownString(error));
-                                        return;
-                                    }
-                                }
-                            } else {
-                                String zipEntryName = zipEntry.getName();
-                                File targetFile = new File(TERMUX_STAGING_PREFIX_DIR_PATH, zipEntryName);
-                                boolean isDirectory = zipEntry.isDirectory();
-
-                                error = ensureDirectoryExists(isDirectory ? targetFile : targetFile.getParentFile());
-                                if (error != null) {
-                                    showBootstrapErrorDialog(activity, whenDone, Error.getErrorMarkdownString(error));
-                                    return;
-                                }
-
-                                if (!isDirectory) {
-                                    try (FileOutputStream outStream = new FileOutputStream(targetFile)) {
-                                        int readBytes;
-                                        while ((readBytes = zipInput.read(buffer)) != -1)
-                                            outStream.write(buffer, 0, readBytes);
-                                    }
-                                    if (zipEntryName.startsWith("bin/") || zipEntryName.startsWith("libexec") ||
-                                        zipEntryName.startsWith("lib/apt/apt-helper") || zipEntryName.startsWith("lib/apt/methods")) {
-                                        //noinspection OctalInteger
-                                        Os.chmod(targetFile.getAbsolutePath(), 0700);
-                                    }
-                                }
-                            }
-                        }
+                    if (zipFile != null) {
+                        extractParallel(zipFile, symlinks, installProgress);
+                    } else {
+                        extractSequential(zipSupplier.get(), symlinks, activity, whenDone);
                     }
 
                     if (symlinks.isEmpty())
@@ -234,6 +216,7 @@ final class TermuxInstaller {
                     }
 
                     Logger.logInfo(LOG_TAG, "Moving termux prefix staging to prefix directory.");
+                    if (installProgress != null) installProgress.onProgress(94, "Finishing setup\u2026");
 
                     if (!TERMUX_STAGING_PREFIX_DIR.renameTo(TERMUX_PREFIX_DIR)) {
                         throw new RuntimeException("Moving termux prefix staging to prefix directory failed");
@@ -244,22 +227,162 @@ final class TermuxInstaller {
                     // Recreate env file since termux prefix was wiped earlier
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
 
+                    if (installProgress != null) installProgress.onProgress(95, "Installing desktop files\u2026");
                     activity.runOnUiThread(whenDone);
 
                 } catch (final Exception e) {
+                    SetupService.stop(activity);
                     showBootstrapErrorDialog(activity, whenDone, Logger.getStackTracesMarkdownString(null, Logger.getStackTracesStringArray(e)));
 
                 } finally {
-                    activity.runOnUiThread(() -> {
-                        try {
-                            progress.dismiss();
-                        } catch (RuntimeException e) {
-                            // Activity already dismissed - ignore.
-                        }
-                    });
+                    if (progress != null) {
+                        activity.runOnUiThread(() -> {
+                            try {
+                                progress.dismiss();
+                            } catch (RuntimeException e) {
+                                // Activity already dismissed - ignore.
+                            }
+                        });
+                    }
                 }
             }
         }.start();
+    }
+
+    /** Sequential extraction for the bundled (stream) bootstrap of the full build. */
+    private static void extractSequential(final InputStream zipStream, final List<Pair<String, String>> symlinks,
+                                          final Activity activity, final Runnable whenDone) throws Exception {
+        final byte[] buffer = new byte[262144];
+        Error error;
+        try (ZipInputStream zipInput = new ZipInputStream(zipStream)) {
+            ZipEntry zipEntry;
+            while ((zipEntry = zipInput.getNextEntry()) != null) {
+                if (zipEntry.getName().equals("SYMLINKS.txt")) {
+                    BufferedReader symlinksReader = new BufferedReader(new InputStreamReader(zipInput));
+                    String line;
+                    while ((line = symlinksReader.readLine()) != null) {
+                        String[] parts = line.split("←");
+                        if (parts.length != 2)
+                            throw new RuntimeException("Malformed symlink line: " + line);
+                        String oldPath = parts[0];
+                        String newPath = TERMUX_STAGING_PREFIX_DIR_PATH + "/" + parts[1];
+                        symlinks.add(Pair.create(oldPath, newPath));
+
+                        error = ensureDirectoryExists(new File(newPath).getParentFile());
+                        if (error != null) {
+                            throw new RuntimeException(error.getMessage());
+                        }
+                    }
+                } else {
+                    String zipEntryName = zipEntry.getName();
+                    File targetFile = new File(TERMUX_STAGING_PREFIX_DIR_PATH, zipEntryName);
+                    boolean isDirectory = zipEntry.isDirectory();
+
+                    error = ensureDirectoryExists(isDirectory ? targetFile : targetFile.getParentFile());
+                    if (error != null) {
+                        throw new RuntimeException(error.getMessage());
+                    }
+
+                    if (!isDirectory) {
+                        try (FileOutputStream outStream = new FileOutputStream(targetFile)) {
+                            int readBytes;
+                            while ((readBytes = zipInput.read(buffer)) != -1)
+                                outStream.write(buffer, 0, readBytes);
+                        }
+                        applyExtractPermissions(targetFile, zipEntryName);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Parallel extraction for file-backed bootstraps: random-access {@link java.util.zip.ZipFile}
+     * with a small worker pool, which is several times faster than single-threaded streaming
+     * on flash storage. Reports progress through {@code installProgress} (55-93%).
+     */
+    private static void extractParallel(final File zipFile, final List<Pair<String, String>> symlinks,
+                                        final InstallProgress installProgress) throws Exception {
+        final int threads = Math.max(2, Math.min(6, Runtime.getRuntime().availableProcessors()));
+        try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(zipFile)) {
+            final List<ZipEntry> files = new ArrayList<>(110000);
+            Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                if (entry.getName().equals("SYMLINKS.txt")) {
+                    try (BufferedReader reader = new BufferedReader(
+                            new InputStreamReader(zip.getInputStream(entry), java.nio.charset.StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            String[] parts = line.split("←");
+                            if (parts.length != 2)
+                                throw new RuntimeException("Malformed symlink line: " + line);
+                            String oldPath = parts[0];
+                            String newPath = TERMUX_STAGING_PREFIX_DIR_PATH + "/" + parts[1];
+                            symlinks.add(Pair.create(oldPath, newPath));
+                            Error error = ensureDirectoryExists(new File(newPath).getParentFile());
+                            if (error != null) throw new RuntimeException(error.getMessage());
+                        }
+                    }
+                } else if (entry.isDirectory() || entry.getName().endsWith("/")) {
+                    Error error = ensureDirectoryExists(new File(TERMUX_STAGING_PREFIX_DIR_PATH, entry.getName()));
+                    if (error != null) throw new RuntimeException(error.getMessage());
+                } else {
+                    files.add(entry);
+                }
+            }
+
+            final int total = files.size();
+            final AtomicInteger done = new AtomicInteger();
+            final AtomicReference<Exception> firstError = new AtomicReference<>();
+            ExecutorService pool = Executors.newFixedThreadPool(threads);
+            for (final ZipEntry entry : files) {
+                pool.submit(() -> {
+                    if (firstError.get() != null) return;
+                    try {
+                        File targetFile = new File(TERMUX_STAGING_PREFIX_DIR_PATH, entry.getName());
+                        File parent = targetFile.getParentFile();
+                        if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory())
+                            throw new RuntimeException("Could not create directory " + parent);
+                        try (InputStream in = zip.getInputStream(entry);
+                             FileOutputStream outStream = new FileOutputStream(targetFile)) {
+                            byte[] buffer = new byte[262144];
+                            int readBytes;
+                            while ((readBytes = in.read(buffer)) != -1)
+                                outStream.write(buffer, 0, readBytes);
+                        }
+                        applyExtractPermissions(targetFile, entry.getName());
+                        int completed = done.incrementAndGet();
+                        if (installProgress != null && (completed % 250 == 0 || completed == total))
+                            installProgress.onProgress(55 + (int) (38d * completed / total),
+                                "Installing packages (" + completed + "/" + total + ")");
+                    } catch (Exception e) {
+                        firstError.compareAndSet(null, e);
+                    }
+                });
+            }
+            pool.shutdown();
+            if (!pool.awaitTermination(90, TimeUnit.MINUTES))
+                throw new RuntimeException("Bootstrap extraction timed out");
+            if (firstError.get() != null) throw firstError.get();
+        }
+    }
+
+    /** Sets the mode of an extracted entry: read-only dex (Android 14+ W^X), executables, the rest. */
+    private static void applyExtractPermissions(File targetFile, String zipEntryName) throws android.system.ErrnoException {
+        if (zipEntryName.endsWith(".apk") || zipEntryName.endsWith(".dex") ||
+            zipEntryName.endsWith(".jar")) {
+            // Android 14+ refuses to load writable dex files
+            // ("Attempt to load writable dex file"), so strip the write bit.
+            //noinspection OctalInteger
+            Os.chmod(targetFile.getAbsolutePath(), 0500);
+        } else if (zipEntryName.startsWith("bin/") || zipEntryName.startsWith("libexec") ||
+            zipEntryName.startsWith("lib/apt/apt-helper") || zipEntryName.startsWith("lib/apt/methods") ||
+            zipEntryName.startsWith("lib/xfce4/xfconf/xfconfd") || zipEntryName.endsWith("/xfconfd") ||
+            zipEntryName.contains("/xfce4/xfconf/")) {
+            //noinspection OctalInteger
+            Os.chmod(targetFile.getAbsolutePath(), 0700);
+        }
     }
 
     public static void showBootstrapErrorDialog(Activity activity, Runnable whenDone, String message) {

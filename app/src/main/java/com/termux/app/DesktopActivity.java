@@ -299,6 +299,32 @@ public class DesktopActivity extends Activity {
 
     private void bootDesktop() {
         if (booted) return;
+        // The slim build can install from a bootstrap pre-staged into public
+        // Downloads (pushed over adb), but reading it needs the storage
+        // permission on Android 10+. Without it we still boot — setup then
+        // falls back to the normal network download.
+        if (Build.VERSION.SDK_INT >= 23
+            && checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE}, REQ_STORAGE);
+            return;
+        }
+        continueBoot();
+    }
+
+    private static final int REQ_STORAGE = 41;
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_STORAGE) {
+            // Boot either way: granted uses the pre-staged zip, denied downloads it.
+            continueBoot();
+        }
+    }
+
+    private void continueBoot() {
+        if (booted) return;
         booted = true;
         acquireWakeLock();
 
@@ -306,6 +332,9 @@ public class DesktopActivity extends Activity {
         // desktop stack) and the bundled Tuxora $HOME files before starting X,
         // so a fresh install boots straight into the configured desktop.
         TuxoraSetup.prepare(this, () -> {
+            // Best-effort: ~/storage/{shared,downloads,music,...} links into the
+            // shared storage, so the desktop file manager can browse the phone.
+            TermuxInstaller.setupStorageSymlinks(this);
             launchDesktopRenderer();
             startXServer();
             finish();
@@ -323,6 +352,10 @@ public class DesktopActivity extends Activity {
 
     private void launchDesktopRenderer() {
         try {
+            // Pin the X display to landscape before the renderer starts: polybar
+            // parks itself off-screen if it launches against a portrait screen.
+            getSharedPreferences("com.termux_preferences", MODE_PRIVATE)
+                .edit().putString("forceOrientation", "landscape").apply();
             Intent intent = new Intent();
             intent.setComponent(new ComponentName(getPackageName(), "com.termux.x11.MainActivity"));
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
@@ -355,7 +388,27 @@ public class DesktopActivity extends Activity {
             "export ANDROID_ROOT=/system\n" +
             "export ANDROID_DATA=/data\n" +
             "export EXTERNAL_STORAGE=/sdcard\n" +
+            "export XDG_DATA_HOME=$HOME/.local/share\n" +
+            "export XDG_DATA_DIRS=$PREFIX/share:$PREFIX/share/xdg:/system/share\n" +
+            "export XDG_CONFIG_DIRS=$PREFIX/etc/xdg\n" +
             "cd $HOME\n" +
+            "[ -d \"$HOME/.cache/fontconfig\" ] || { mkdir -p \"$HOME/.cache/fontconfig\"; \"$PREFIX/bin/fc-cache\" -f >/dev/null 2>&1 || true; }\n" +
+            "[ -f \"$PREFIX/var/lib/dbus/machine-id\" ] || { mkdir -p \"$PREFIX/var/lib/dbus\"; \"$PREFIX/bin/dbus-uuidgen\" --ensure >/dev/null 2>&1 || true; }\n" +
+            "if [ -f \"$HOME/.tuxora-motd\" ] && ! grep -q 'Tuxora' \"$PREFIX/etc/motd\" 2>/dev/null; then cp \"$HOME/.tuxora-motd\" \"$PREFIX/etc/motd\"; fi\n" +
+            "ln -sfn /sdcard $HOME/sdcard\n" +
+            "# GTK resolves icon themes through the XDG data dirs; themes shipped in\n" +
+            "# the legacy ~/.icons path are invisible, so expose them under\n" +
+            "# ~/.local/share/icons (which is $XDG_DATA_HOME/icons).\n" +
+            "if [ -d \"$HOME/.icons\" ]; then\n" +
+            "  mkdir -p \"$HOME/.local/share/icons\"\n" +
+            "  for t in \"$HOME/.icons\"/*; do\n" +
+            "    [ -e \"$t\" ] || continue\n" +
+            "    ln -sfn \"$t\" \"$HOME/.local/share/icons/$(basename \"$t\")\"\n" +
+            "  done\n" +
+            "fi\n" +
+            "if [ -f $HOME/.config/rofi/bin/launcher ] && grep -q 'STYLE=\"launcher\"' $HOME/.config/rofi/bin/launcher; then\n" +
+            "  sed -i 's/DIR=\"tuxora\"/DIR=\"launchers\"/; s/STYLE=\"launcher\"/STYLE=\"Appdrawer\"/' $HOME/.config/rofi/bin/launcher\n" +
+            "fi\n" +
             "if pgrep -f 'termux-x11 " + pkg + "' >/dev/null 2>&1; then exit 0; fi\n" +
             "setsid $PREFIX/bin/termux-x11 :0 -ac " +
             "-xstartup \"dbus-launch --exit-with-session openbox-session\" " +

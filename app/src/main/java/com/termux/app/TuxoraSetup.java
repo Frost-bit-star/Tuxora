@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.Context;
 import android.os.Build;
+import android.os.Environment;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.util.Log;
@@ -45,6 +46,8 @@ public final class TuxoraSetup {
     private static final String LOG_TAG = "TuxoraSetup";
     private static final String MARKER_NAME = ".tuxora-desktop-v1";
     private static final String HOME_ZIP = "tuxora-home.zip";
+    /** Minimum size for a bootstrap file to be trusted as complete when pre-staged. */
+    private static final long MIN_STAGED_BYTES = 1024 * 1024;
     private static final String HOME_SYMLINKS = "tuxora-home-symlinks.txt";
     private static final char SEP = '\u2190'; // ←
 
@@ -91,22 +94,19 @@ public final class TuxoraSetup {
     }
 
     private static void prepareSlim(final Activity activity, final File marker, final Runnable onReady) {
-        final Dialog progress = showSetupScreen(activity);
+        final Dialog screen = showSetupScreen(activity);
+        SetupService.start(activity);
+        final SetupProgress ui = new SetupProgress(activity, screen);
         new Thread(() -> {
             try {
                 String arch = termuxArch();
                 String base = BuildConfig.TUXORA_RELEASE_BASE_URL + "/v" + BuildConfig.VERSION_NAME;
-                File bootstrapZip = new File(activity.getCacheDir(), "bootstrap-" + arch + ".zip");
 
-                // Slim = app + dotfiles in the APK; only the dependency stack is downloaded.
-                download(base + "/bootstrap-" + arch + ".zip", bootstrapZip);
+                // Slim = app + dotfiles in the APK; only the dependency stack is needed.
+                File bootstrapZip = resolveBootstrap(activity, arch, base + "/bootstrap-" + arch + ".zip", ui);
 
-                activity.runOnUiThread(() -> {
-                    // Keep our setup screen up; TermuxInstaller stacks an identical
-                    // one on top during install, then dismisses only its own. Ours
-                    // stays visible through the home extraction below and is
-                    // dismissed right before the boot sequence continues.
-                    TermuxInstaller.installBootstrapFromFile(activity, bootstrapZip, () -> new Thread(() -> {
+                activity.runOnUiThread(() ->
+                    TermuxInstaller.installBootstrapFromFile(activity, bootstrapZip, ui, () -> new Thread(() -> {
                         try {
                             File home = homeDir(activity);
                             try (InputStream zip = activity.getAssets().open(HOME_ZIP)) {
@@ -117,20 +117,52 @@ public final class TuxoraSetup {
                             }
                             mark(marker);
                             Log.i(LOG_TAG, "Bundled desktop files installed");
-                            dismiss(progress);
+                            SetupService.notifyProgress(100, "Done");
+                            SetupService.stop(activity);
+                            dismiss(screen);
                             activity.runOnUiThread(onReady);
                         } catch (Exception e) {
-                            dismiss(progress);
+                            SetupService.stop(activity);
+                            dismiss(screen);
                             Log.e(LOG_TAG, "Failed to install bundled desktop files", e);
                         }
-                    }).start());
-                });
+                    }).start()));
             } catch (Exception e) {
-                activity.runOnUiThread(() -> dismiss(progress));
+                SetupService.stop(activity);
+                dismiss(screen);
                 Log.e(LOG_TAG, "Failed to download desktop dependencies", e);
                 showDownloadError(activity, marker, onReady, e);
             }
         }).start();
+    }
+
+    /** Bridges installer/download progress to the setup screen and the setup notification. */
+    static final class SetupProgress implements TermuxInstaller.InstallProgress {
+        private final Activity activity;
+        private final Dialog screen;
+
+        SetupProgress(Activity activity, Dialog screen) {
+            this.activity = activity;
+            this.screen = screen;
+        }
+
+        @Override
+        public void onProgress(final int percent, final String message) {
+            SetupService.notifyProgress(percent, message);
+            activity.runOnUiThread(() -> {
+                if (activity.isFinishing() || activity.isDestroyed()) return;
+                try {
+                    View content = screen.getWindow() != null ? screen.getWindow().getDecorView() : null;
+                    if (content == null) return;
+                    TextView messageView = content.findViewById(R.id.setup_message);
+                    if (messageView != null) messageView.setText(message);
+                    android.widget.ProgressBar bar = content.findViewById(R.id.setup_progress);
+                    if (bar != null) bar.setProgress(percent);
+                } catch (RuntimeException ignored) {
+                    // Screen already gone.
+                }
+            });
+        }
     }
 
     private static void showDownloadError(final Activity activity, final File marker, final Runnable onReady, Exception e) {
@@ -154,7 +186,39 @@ public final class TuxoraSetup {
         });
     }
 
-    private static void download(String urlString, File out) throws Exception {
+    /**
+     * Returns a bootstrap zip without hitting the network when possible: app cache first,
+     * then a file pre-staged into public Downloads (e.g. pushed over adb), else downloads
+     * it to the cache. Falls through to the normal download if the staged file is missing
+     * or unreadable (no storage permission), so staging can never make things worse.
+     */
+    private static File resolveBootstrap(final Activity activity, final String arch, final String url,
+                                         final TermuxInstaller.InstallProgress progress) throws Exception {
+        File cache = new File(activity.getCacheDir(), "bootstrap-" + arch + ".zip");
+        if (cache.exists() && cache.length() > MIN_STAGED_BYTES) {
+            Log.i(LOG_TAG, "Using cached bootstrap (" + cache.length() + " bytes): " + cache.getAbsolutePath());
+            if (progress != null) progress.onProgress(55, "Installing packages\u2026");
+            return cache;
+        }
+        try {
+            File staged = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "bootstrap-" + arch + ".zip");
+            if (staged.exists() && staged.isFile() && staged.length() > MIN_STAGED_BYTES) {
+                Log.i(LOG_TAG, "Using pre-staged bootstrap from Downloads (" + staged.length() + " bytes)");
+                if (progress != null) progress.onProgress(55, "Installing packages\u2026");
+                return staged;
+            }
+        } catch (Exception e) {
+            Log.i(LOG_TAG, "No pre-staged bootstrap available: " + e);
+        }
+        download(url, cache, progress);
+        return cache;
+    }
+
+    private static void download(String urlString, File out, TermuxInstaller.InstallProgress progress) throws Exception {
+        if (out.exists() && out.length() > 1024 * 1024) {
+            Log.i(LOG_TAG, "Using pre-staged bootstrap (" + out.length() + " bytes): " + out.getAbsolutePath());
+            return;
+        }
         Log.i(LOG_TAG, "Downloading " + urlString);
         HttpURLConnection connection = (HttpURLConnection) new URL(urlString).openConnection();
         connection.setInstanceFollowRedirects(true);
@@ -165,20 +229,33 @@ public final class TuxoraSetup {
             if (code != HttpURLConnection.HTTP_OK) {
                 throw new Exception("HTTP " + code + " for " + urlString);
             }
-            byte[] buffer = new byte[65536];
+            long total = connection.getContentLengthLong();
+            long done = 0;
+            long lastReport = 0;
+            byte[] buffer = new byte[262144];
             try (InputStream in = connection.getInputStream();
                  FileOutputStream outStream = new FileOutputStream(out)) {
                 int read;
-                while ((read = in.read(buffer)) != -1) outStream.write(buffer, 0, read);
+                while ((read = in.read(buffer)) != -1) {
+                    outStream.write(buffer, 0, read);
+                    done += read;
+                    if (progress != null && total > 0 && done - lastReport >= 4 * 1024 * 1024) {
+                        lastReport = done;
+                        int percent = (int) (50L * done / total);
+                        progress.onProgress(percent, "Downloading packages\u2026 " + (done / (1024 * 1024)) +
+                            " / " + (total / (1024 * 1024)) + " MB");
+                    }
+                }
             }
         } finally {
             connection.disconnect();
         }
+        if (progress != null) progress.onProgress(55, "Installing packages\u2026");
         Log.i(LOG_TAG, "Downloaded " + out.getAbsolutePath() + " (" + out.length() + " bytes)");
     }
 
     private static void extractZip(InputStream zipStream, File home) throws Exception {
-        byte[] buffer = new byte[16384];
+        byte[] buffer = new byte[262144];
         try (ZipInputStream zip = new ZipInputStream(zipStream)) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {

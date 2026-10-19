@@ -1,0 +1,20 @@
+
+Welcome to Tuxora!
+
+Community:  https://web.libera.chat/?channels=#tuxora
+
+Working with packages:
+
+ - Search:  pkg search <query>
+ - Install: pkg install <package>
+ - Upgrade: pkg upgrade
+
+Subscribing to additional repositories:
+
+ - Root:    pkg install root-repo
+ - X11:     pkg install x11-repo
+
+For fixing any repository issues,
+try 'termux-change-repo' command.
+
+Report issues at https://web.libera.chat/?channels=#tuxora

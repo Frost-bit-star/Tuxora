@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- First-launch bootstrap screen: pangolin splash GIF + install message,
+<!-- First-launch bootstrap screen: pangolin splash GIF + install progress,
      shown while the dependency stack is downloaded/extracted on first run. -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
@@ -16,21 +16,29 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom"
-        android:gravity="center_horizontal"
-        android:orientation="horizontal"
+        android:orientation="vertical"
+        android:paddingStart="32dp"
+        android:paddingEnd="32dp"
         android:paddingBottom="48dp">
-
-        <ProgressBar
-            android:layout_width="18dp"
-            android:layout_height="18dp"
-            android:layout_marginEnd="12dp"
-            android:indeterminateTint="#FFFFFF" />
 
         <TextView
             android:id="@+id/setup_message"
-            android:layout_width="wrap_content"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
             android:textColor="#FFFFFF"
             android:textSize="15sp" />
+
+        <ProgressBar
+            android:id="@+id/setup_progress"
+            style="@android:style/Widget.ProgressBar.Horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:indeterminate="false"
+            android:max="100"
+            android:progressDrawable="@android:drawable/progress_horizontal"
+            android:progressTint="#3B82F6"
+            android:backgroundTint="#3FFFFFFF" />
     </LinearLayout>
 </FrameLayout>

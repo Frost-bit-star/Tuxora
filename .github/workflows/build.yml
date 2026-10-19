@@ -42,69 +42,49 @@ jobs:
             ~/.gradle/wrapper
           key: tuxora-${{ runner.os }}-${{ hashFiles('scripts/build-tuxora-bootstraps.sh') }}
 
-      - name: Generate pre-configured bootstrap (arm64 only)
-        shell: bash {0}
-        run: |
-          chmod +x scripts/*.sh scripts/*.py
-          bash scripts/build-tuxora-bootstraps.sh aarch64
-
-      - name: Save real bootstrap for first-run download
-        shell: bash {0}
-        run: |
-          mkdir -p release-assets
-          cp app/src/main/cpp/bootstrap-aarch64.zip release-assets/bootstrap-aarch64.zip
-
-      - name: Build slim arm64-v8a release (bootstrap downloaded on first run)
+      - name: Build self-contained arm64-v8a release (full build)
         shell: bash {0}
         env:
           TERMUX_PACKAGE_VARIANT: apt-android-7
           TERMUX_SPLIT_APKS_FOR_RELEASE_BUILDS: '1'
-          TUXORA_SLIM: '1'
           TUXORA_ABIS: arm64-v8a
         run: |
-          # versionName must match the release tag (without leading v), otherwise
-          # the first-run download URL 404s (TuxoraSetup builds .../download/v$VERSION_NAME/...).
           VER="${GITHUB_REF_NAME:-}"
           VER="${VER#v}"
           if [[ ! "$VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then VER=""; fi
           export TERMUX_APP_VERSION_NAME="$VER"
+          mkdir -p dist
+          chmod +x scripts/*.sh scripts/*.py
           ./gradlew --no-daemon :app:clean
-          python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1],'w').writestr('SYMLINKS.txt','')" "app/src/main/cpp/bootstrap-aarch64.zip"
-          APK_VERSION_TAG="${GITHUB_REF_NAME:-dev}-github-slim"
+          bash scripts/build-tuxora-bootstraps.sh aarch64
+          APK_VERSION_TAG="${GITHUB_REF_NAME:-dev}-github"
           export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
           ./gradlew --no-daemon :app:assembleRelease
+          for f in app/build/outputs/apk/release/*.apk; do
+            [ -f "$f" ] || continue
+            base="$(basename "$f")"
+            if [[ "$base" == *"arm64-v8a"* ]]; then
+              cp "$f" dist/tuxora.apk
+            fi
+          done
+          ls -la dist
+          (cd dist && sha256sum tuxora.apk > sha256sums.txt && cat sha256sums.txt)
 
-      - name: Collect APKs, bootstraps and checksums
-        shell: bash {0}
-        run: |
-          mkdir -p dist release-assets
-          cp app/build/outputs/apk/release/*.apk dist/ 2>/dev/null || true
-          cp app/src/bundled/assets/tuxora-home.zip app/src/bundled/assets/tuxora-home-symlinks.txt release-assets/ 2>/dev/null || true
-          ls -la dist release-assets
-          (cd dist && sha256sum *.apk > sha256sums.txt && cat sha256sums.txt)
-
-      - name: Upload APK artifacts
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: tuxora-apks
+          name: tuxora
           path: |
-            dist/*.apk
+            dist/tuxora.apk
             dist/sha256sums.txt
           if-no-files-found: error
-
-      - name: Delete existing release for this tag
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release delete "$GITHUB_REF_NAME" --yes --cleanup-tag=false || true
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*.apk
+            dist/tuxora.apk
             dist/sha256sums.txt
-            release-assets/*
           fail_on_unmatched_files: true
           generate_release_notes: true
