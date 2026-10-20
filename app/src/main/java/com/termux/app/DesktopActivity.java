@@ -118,11 +118,6 @@ public class DesktopActivity extends Activity {
             Log.w(LOG_TAG, "Splash GIF failed to load, continuing without it", e);
         }
         main.postDelayed(this::revealLogin, SPLASH_MS);
-
-        // Start installing/booting right away, in parallel with the splash, so the
-        // desktop is already up (or well on its way) by the time the splash ends and
-        // the user never has to tap through the login form just to reach the desktop.
-        bootDesktop();
     }
 
     /** True once the desktop boot has been kicked off; the login form is then skipped. */
@@ -146,10 +141,6 @@ public class DesktopActivity extends Activity {
     // ------------------------------------------------------------------ splash
 
     private void revealLogin() {
-        // While the desktop is booting behind the splash there is no reason to show
-        // the login form at all — the user would only have to dismiss it. Leave the
-        // splash up; continueBoot() finishes this activity once X is starting.
-        if (autoBooting && !booted) return;
         authExecutor.execute(() -> {
             String user = TermuxPassword.resolveUsername(this);
             boolean hasPw = TermuxPassword.hasPassword(this);
