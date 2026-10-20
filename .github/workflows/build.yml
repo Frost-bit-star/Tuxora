@@ -60,13 +60,22 @@ jobs:
           APK_VERSION_TAG="${GITHUB_REF_NAME:-dev}-github"
           export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
           ./gradlew --no-daemon :app:assembleRelease
-          for f in app/build/outputs/apk/release/*.apk; do
-            [ -f "$f" ] || continue
-            base="$(basename "$f")"
-            if [[ "$base" == *"arm64-v8a"* ]]; then
-              cp "$f" dist/tuxora.apk
-            fi
-          done
+
+      - name: Sign Release APK
+        uses: r0adkll/sign-android-release@v1
+        id: sign_app
+        with:
+          releaseDirectory: app/build/outputs/apk/release
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.ALIAS }}
+          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Prepare distribution artifacts
+        shell: bash {0}
+        run: |
+          mkdir -p dist
+          cp "${{ steps.sign_app.outputs.signedReleaseFile }}" dist/tuxora.apk
           ls -la dist
           (cd dist && sha256sum tuxora.apk > sha256sums.txt && cat sha256sums.txt)
 
