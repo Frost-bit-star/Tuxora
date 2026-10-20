@@ -30,6 +30,7 @@ import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import com.termux.BuildConfig;
 import com.termux.R;
 
 import pl.droidsonroids.gif.GifDrawable;
@@ -117,7 +118,15 @@ public class DesktopActivity extends Activity {
             Log.w(LOG_TAG, "Splash GIF failed to load, continuing without it", e);
         }
         main.postDelayed(this::revealLogin, SPLASH_MS);
+
+        // Start installing/booting right away, in parallel with the splash, so the
+        // desktop is already up (or well on its way) by the time the splash ends and
+        // the user never has to tap through the login form just to reach the desktop.
+        bootDesktop();
     }
+
+    /** True once the desktop boot has been kicked off; the login form is then skipped. */
+    private boolean autoBooting;
 
     // ------------------------------------------------------------------ clock
 
@@ -137,6 +146,10 @@ public class DesktopActivity extends Activity {
     // ------------------------------------------------------------------ splash
 
     private void revealLogin() {
+        // While the desktop is booting behind the splash there is no reason to show
+        // the login form at all — the user would only have to dismiss it. Leave the
+        // splash up; continueBoot() finishes this activity once X is starting.
+        if (autoBooting && !booted) return;
         authExecutor.execute(() -> {
             String user = TermuxPassword.resolveUsername(this);
             boolean hasPw = TermuxPassword.hasPassword(this);
@@ -299,11 +312,16 @@ public class DesktopActivity extends Activity {
 
     private void bootDesktop() {
         if (booted) return;
+        autoBooting = true;
         // The slim build can install from a bootstrap pre-staged into public
         // Downloads (pushed over adb), but reading it needs the storage
         // permission on Android 10+. Without it we still boot — setup then
         // falls back to the normal network download.
-        if (Build.VERSION.SDK_INT >= 23
+        // Only the slim build reads a pre-staged bootstrap from public Downloads, which
+        // needs READ_EXTERNAL_STORAGE. The full build ships everything in the APK and must
+        // NOT request it: on Android 11+ the permission is effectively auto-denied, so the
+        // request callback may never fire and boot would hang forever on the splash.
+        if (BuildConfig.TUXORA_SLIM && Build.VERSION.SDK_INT >= 23
             && checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
                 != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{android.Manifest.permission.READ_EXTERNAL_STORAGE}, REQ_STORAGE);
@@ -392,6 +410,12 @@ public class DesktopActivity extends Activity {
             "export XDG_DATA_DIRS=$PREFIX/share:$PREFIX/share/xdg:/system/share\n" +
             "export XDG_CONFIG_DIRS=$PREFIX/etc/xdg\n" +
             "cd $HOME\n" +
+            "mkdir -p \"$HOME/.mpd/playlists\" \"$HOME/Music\"\n" +
+            "# Belt-and-suspenders: the desktop helper scripts (rofi launcher/menu, polybar\n" +
+            "# modules) must be executable or the menu button and mpd/status scripts fail\n" +
+            "# with EACCES. Extraction normally sets this, but re-assert it here.\n" +
+            "chmod 700 \"$HOME/.config/rofi/bin\"/* \"$HOME/.local/bin\"/* 2>/dev/null\n" +
+            "chmod 700 \"$HOME/.config/polybar\"/*/scripts/* \"$HOME/.config/polybar\"/*/launch.sh 2>/dev/null\n" +
             "[ -d \"$HOME/.cache/fontconfig\" ] || { mkdir -p \"$HOME/.cache/fontconfig\"; \"$PREFIX/bin/fc-cache\" -f >/dev/null 2>&1 || true; }\n" +
             "[ -f \"$PREFIX/var/lib/dbus/machine-id\" ] || { mkdir -p \"$PREFIX/var/lib/dbus\"; \"$PREFIX/bin/dbus-uuidgen\" --ensure >/dev/null 2>&1 || true; }\n" +
             "if [ -f \"$HOME/.tuxora-motd\" ] && ! grep -q 'Tuxora' \"$PREFIX/etc/motd\" 2>/dev/null; then cp \"$HOME/.tuxora-motd\" \"$PREFIX/etc/motd\"; fi\n" +
@@ -406,13 +430,54 @@ public class DesktopActivity extends Activity {
             "    ln -sfn \"$t\" \"$HOME/.local/share/icons/$(basename \"$t\")\"\n" +
             "  done\n" +
             "fi\n" +
+            "# The bundled packages ship no generated caches, so build them once. Without\n" +
+            "# share/mime/mime.cache Thunar cannot resolve a file's MIME type and shows no\n" +
+            "# file icons (folder icons still work because inode/directory is built in), and\n" +
+            "# without share/glib-2.0/schemas/gschemas.compiled GTK aborts with \"No GSettings\n" +
+            "# schema could be found\", so icon/settings theming (rofi launcher icons) fails.\n" +
+            "if [ ! -f \"$PREFIX/share/mime/mime.cache\" ] && [ -x \"$PREFIX/bin/update-mime-database\" ]; then\n" +
+            "  \"$PREFIX/bin/update-mime-database\" \"$PREFIX/share/mime\" >/dev/null 2>&1 || true\n" +
+            "fi\n" +
+            "if [ ! -f \"$PREFIX/share/glib-2.0/schemas/gschemas.compiled\" ] && [ -x \"$PREFIX/bin/glib-compile-schemas\" ]; then\n" +
+            "  \"$PREFIX/bin/glib-compile-schemas\" \"$PREFIX/share/glib-2.0/schemas\" >/dev/null 2>&1 || true\n" +
+            "fi\n" +
+            "# The icon themes ship an icon-theme.cache generated on the build machine. A\n" +
+            "# cache whose embedded directory hashes do not match the extracted tree makes\n" +
+            "# GTK3 trust the cache, miss every lookup and render blank icons (rofi launcher,\n" +
+            "# Thunar), instead of falling back to scanning. Rebuild it unconditionally.\n" +
+            "if [ -x \"$PREFIX/bin/gtk-update-icon-cache\" ]; then\n" +
+            "  for t in \"$HOME/.local/share/icons\"/* \"$PREFIX/share/icons\"/*; do\n" +
+            "    [ -f \"$t/index.theme\" ] || continue\n" +
+            "    ( cd \"$t\" && \"$PREFIX/bin/gtk-update-icon-cache\" -q -t -f . >/dev/null 2>&1 ) || true\n" +
+            "  done\n" +
+            "fi\n" +
+            "{ echo \"== tuxora diag $(date) ==\";\n" +
+            "  echo \"mime.cache: $( [ -f \"$PREFIX/share/mime/mime.cache\" ] && echo yes || echo no )\";\n" +
+            "  echo \"gschemas.compiled: $( [ -f \"$PREFIX/share/glib-2.0/schemas/gschemas.compiled\" ] && echo yes || echo no )\";\n" +
+            "  echo \"PREFIX/share/icons:\"; ls \"$PREFIX/share/icons\" 2>&1;\n" +
+            "  echo \"Papirus index: $( [ -f \"$PREFIX/share/icons/Papirus/index.theme\" ] && echo yes || echo no )\";\n" +
+            "  echo \"HOME/icons/Hybrid apps/48 count: $(ls \"$HOME/.local/share/icons/Hybrid/apps/48\" 2>/dev/null | wc -l)\";\n" +
+            "  echo \"-- ls ~/.icons/Hybrid/apps/48 (first 8):\"; ls \"$HOME/.icons/Hybrid/apps/48\" 2>&1 | head -8;\n" +
+            "  echo \"-- mime query:\"; printf 'hello' > \"$TMPDIR/t.txt\"; \"$PREFIX/bin/xdg-mime\" query filetype \"$TMPDIR/t.txt\" 2>&1;\n" +
+            "  echo \"-- launcher script:\"; cat \"$HOME/.config/rofi/bin/launcher\" 2>&1 | head -40;\n" +
+            "  echo \"-- gtk settings:\"; cat \"$HOME/.config/gtk-3.0/settings.ini\" 2>&1;\n" +
+            "} >/sdcard/desktop-diag.log 2>&1\n" +
             "if [ -f $HOME/.config/rofi/bin/launcher ] && grep -q 'STYLE=\"launcher\"' $HOME/.config/rofi/bin/launcher; then\n" +
             "  sed -i 's/DIR=\"tuxora\"/DIR=\"launchers\"/; s/STYLE=\"launcher\"/STYLE=\"Appdrawer\"/' $HOME/.config/rofi/bin/launcher\n" +
             "fi\n" +
+            "# The Appdrawer style shipped with icon-theme Papirus, but the Papirus index\n" +
+            "# inherits 'breeze,hicolor' and breeze is not installed, so rofi's icon lookup\n" +
+            "# stops before hicolor and every launcher entry renders without an icon. The\n" +
+            "# bundled Hybrid theme is self-contained and is what the shipped GTK settings\n" +
+            "# already select. Force every launcher rasi to Hybrid so icons resolve.\n" +
+            "for f in $HOME/.config/rofi/launchers/*.rasi $HOME/.config/rofi/tuxora/launcher.rasi; do\n" +
+            "  [ -f \"$f\" ] || continue\n" +
+            "  sed -i 's/icon-theme:[[:space:]]*\"[^\"]*\"/icon-theme:                     \"Hybrid\"/' \"$f\"\n" +
+            "done\n" +
             "if pgrep -f 'termux-x11 " + pkg + "' >/dev/null 2>&1; then exit 0; fi\n" +
             "setsid $PREFIX/bin/termux-x11 :0 -ac " +
             "-xstartup \"dbus-launch --exit-with-session openbox-session\" " +
-            "</dev/null >$HOME/desktop-x.log 2>&1 &\n";
+            "</dev/null >/sdcard/desktop-x.log 2>&1 &\n";
 
         try {
             File dir = new File(home, ".tuxora");

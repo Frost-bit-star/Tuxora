@@ -23,7 +23,6 @@ import com.termux.shared.termux.TermuxUtils;
 import com.termux.shared.termux.shell.command.environment.TermuxShellEnvironment;
 
 import java.io.BufferedReader;
-import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
@@ -77,8 +76,18 @@ final class TermuxInstaller {
         void onProgress(int percent, String message);
     }
 
-    /** Performs bootstrap setup if necessary. */
+    /** Performs bootstrap setup if necessary, showing the installer's own progress screen. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
+        setupBootstrapIfNeeded(activity, null, whenDone);
+    }
+
+    /**
+     * Performs bootstrap setup if necessary. When {@code installProgress} is {@code null} the
+     * installer shows its own setup screen; otherwise the caller owns the UI and receives
+     * extraction progress so the bar does not sit still through the long bootstrap extract.
+     */
+    static void setupBootstrapIfNeeded(final Activity activity, final InstallProgress installProgress,
+                                       final Runnable whenDone) {
         if (!validateEnvironment(activity)) return;
 
         // If prefix directory exists, even if its a symlink to a valid directory and symlink is not broken/dangling
@@ -93,7 +102,7 @@ final class TermuxInstaller {
             Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" does not exist but another file exists at its destination.");
         }
 
-        runInstaller(activity, null, () -> new ByteArrayInputStream(loadZipBytes()), null, whenDone);
+        runInstaller(activity, null, TermuxInstaller::openEmbeddedBootstrap, installProgress, whenDone);
     }
 
     /**
@@ -160,8 +169,11 @@ final class TermuxInstaller {
 
     private static void runInstaller(final Activity activity, final File zipFile, final ZipSupplier zipSupplier,
                                      final InstallProgress installProgress, final Runnable whenDone) {
-        // When a progress sink is provided the caller owns the UI; otherwise show our own screen.
+        // When a progress sink is provided the caller owns the UI; otherwise show our own
+        // screen and drive it through an internal sink so the bar still advances.
         final android.app.Dialog progress = (installProgress == null) ? TuxoraSetup.showSetupScreen(activity) : null;
+        final InstallProgress sink = (installProgress != null) ? installProgress
+            : (progress != null ? new TuxoraSetup.SetupProgress(activity, progress) : null);
         new Thread() {
             @Override
             public void run() {
@@ -199,14 +211,14 @@ final class TermuxInstaller {
                     }
 
                     Logger.logInfo(LOG_TAG, "Extracting bootstrap zip to prefix staging directory \"" + TERMUX_STAGING_PREFIX_DIR_PATH + "\".");
-                    if (installProgress != null) installProgress.onProgress(55, "Installing packages\u2026");
+                    if (sink != null) sink.onProgress(55, "Installing packages\u2026");
 
                     final List<Pair<String, String>> symlinks = new ArrayList<>(50);
 
                     if (zipFile != null) {
-                        extractParallel(zipFile, symlinks, installProgress);
+                        extractParallel(zipFile, symlinks, sink);
                     } else {
-                        extractSequential(zipSupplier.get(), symlinks, activity, whenDone);
+                        extractSequential(zipSupplier.get(), symlinks, sink);
                     }
 
                     if (symlinks.isEmpty())
@@ -216,7 +228,7 @@ final class TermuxInstaller {
                     }
 
                     Logger.logInfo(LOG_TAG, "Moving termux prefix staging to prefix directory.");
-                    if (installProgress != null) installProgress.onProgress(94, "Finishing setup\u2026");
+                    if (sink != null) sink.onProgress(94, "Finishing setup\u2026");
 
                     if (!TERMUX_STAGING_PREFIX_DIR.renameTo(TERMUX_PREFIX_DIR)) {
                         throw new RuntimeException("Moving termux prefix staging to prefix directory failed");
@@ -227,10 +239,13 @@ final class TermuxInstaller {
                     // Recreate env file since termux prefix was wiped earlier
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
 
-                    if (installProgress != null) installProgress.onProgress(95, "Installing desktop files\u2026");
+                    if (sink != null) sink.onProgress(95, "Installing desktop files\u2026");
                     activity.runOnUiThread(whenDone);
 
-                } catch (final Exception e) {
+                } catch (final Throwable e) {
+                    // Catch Throwable (not just Exception): a low-heap device can throw
+                    // OutOfMemoryError while streaming the bootstrap, and swallowing it
+                    // left the setup dialog dismissed with no error and no retry.
                     SetupService.stop(activity);
                     showBootstrapErrorDialog(activity, whenDone, Logger.getStackTracesMarkdownString(null, Logger.getStackTracesStringArray(e)));
 
@@ -251,9 +266,10 @@ final class TermuxInstaller {
 
     /** Sequential extraction for the bundled (stream) bootstrap of the full build. */
     private static void extractSequential(final InputStream zipStream, final List<Pair<String, String>> symlinks,
-                                          final Activity activity, final Runnable whenDone) throws Exception {
+                                          final InstallProgress installProgress) throws Exception {
         final byte[] buffer = new byte[262144];
         Error error;
+        int extracted = 0;
         try (ZipInputStream zipInput = new ZipInputStream(zipStream)) {
             ZipEntry zipEntry;
             while ((zipEntry = zipInput.getNextEntry()) != null) {
@@ -290,6 +306,13 @@ final class TermuxInstaller {
                                 outStream.write(buffer, 0, readBytes);
                         }
                         applyExtractPermissions(targetFile, zipEntryName);
+                        // The bundled bootstrap holds ~110k entries; without periodic
+                        // updates the progress bar sat at 55% for the whole extraction
+                        // and users thought the setup had frozen.
+                        if (installProgress != null && (++extracted % 250 == 0)) {
+                            installProgress.onProgress(Math.min(93, 55 + extracted / 1200),
+                                "Installing packages (" + extracted + ")");
+                        }
                     }
                 }
             }
@@ -521,12 +544,39 @@ final class TermuxInstaller {
         return FileUtils.createDirectoryFile(directory.getAbsolutePath());
     }
 
-    public static byte[] loadZipBytes() {
+    /**
+     * Opens a stream over the bootstrap zip embedded in {@code libtermux-bootstrap.so}.
+     *
+     * <p>The native side hands back a direct {@link java.nio.ByteBuffer} that wraps the
+     * zip bytes in place (they live in the mmap'd {@code .rodata} of the shared library),
+     * so nothing is copied onto the Java heap. The previous implementation returned the
+     * whole zip as a {@code byte[]}, which needs ~518 MB of contiguous heap for the
+     * self-contained build and threw {@link OutOfMemoryError} on devices whose
+     * {@code dalvik.vm.heapgrowthlimit} is 256-512 MB — the desktop never finished
+     * installing.
+     */
+    static InputStream openEmbeddedBootstrap() {
         // Only load the shared library when necessary to save memory usage.
         System.loadLibrary("termux-bootstrap");
-        return getZip();
+        final java.nio.ByteBuffer buf = getZip();
+        if (buf == null) throw new IllegalStateException("getZip() returned null (NewDirectByteBuffer failed)");
+        return new InputStream() {
+            @Override
+            public int read() {
+                return buf.hasRemaining() ? buf.get() & 0xFF : -1;
+            }
+
+            @Override
+            public int read(byte[] b, int off, int len) {
+                if (!buf.hasRemaining()) return -1;
+                len = Math.min(len, buf.remaining());
+                buf.get(b, off, len);
+                return len;
+            }
+        };
     }
 
-    public static native byte[] getZip();
+    /** Native side of {@link #openEmbeddedBootstrap()}: a direct buffer over the embedded zip. */
+    public static native java.nio.ByteBuffer getZip();
 
 }

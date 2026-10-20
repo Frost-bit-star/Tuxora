@@ -94,6 +94,64 @@ for arch in $(echo "$ARCHS" | tr ',' ' '); do
     fi
 done
 
+# Patch termux-x11 inside each bootstrap.
+#
+# The stock termux-x11-nightly package ships:
+#   * A Loader that reads the APK signing certificate via the deprecated
+#     PackageManager.GET_SIGNATURES call, which throws on Android 13+ (SDK 33),
+#     so the X server aborts with "Termux:X11 application is not found".
+#     third_party/termux-x11/shell-loader is patched to use
+#     GET_SIGNING_CERTIFICATES on SDK>=33 and SigningInfo on SDK>=28.
+#   * A launcher script hardcoded to the com.termux.x11 package name, which never
+#     matches this fork (com.termux) so the running server is invisible to the
+#     renderer. We point it at our own package and set a stable --nice-name.
+# Build the patched loader APK once, then inject it and rewrite the script in
+# every bootstrap archive.
+LOADER_REPO="$REPO_ROOT/third_party/termux-x11"
+LOADER_APK=""
+if [ -d "$LOADER_REPO" ]; then
+    echo "[*] Building patched termux-x11 shell-loader..."
+    (cd "$LOADER_REPO" && ./gradlew --no-daemon :shell-loader:assembleDebug -x lint >/dev/null 2>&1) || true
+    for cand in "$LOADER_REPO/shell-loader/build/outputs/apk/debug"/*.apk; do
+        [ -f "$cand" ] && LOADER_APK="$cand" && break
+    done
+fi
+
+if [ -n "$LOADER_APK" ] && [ -f "$LOADER_APK" ]; then
+    for arch in $(echo "$ARCHS" | tr ',' ' '); do
+        zip_file="$BUILD_DIR/bootstrap-$arch.zip"
+        [ -f "$zip_file" ] || continue
+        tmp_dir="$(mktemp -d)"
+        mkdir -p "$tmp_dir/libexec/termux-x11" "$tmp_dir/bin"
+        cp -f "$LOADER_APK" "$tmp_dir/libexec/termux-x11/loader.apk"
+
+        # Rewrite the launcher: correct target package and CLASSPATH.
+        if unzip -p "$zip_file" bin/termux-x11 > "$tmp_dir/bin/termux-x11" 2>/dev/null; then
+            python3 - "$tmp_dir/bin/termux-x11" <<'PYEOF'
+import sys, re
+p = sys.argv[1]
+s = open(p).read()
+s = re.sub(
+    r'export CLASSPATH=.*?\n',
+    'export CLASSPATH=/data/data/com.termux/files/usr/libexec/termux-x11/loader.apk\n',
+    s)
+s = s.replace(
+    'exec /system/bin/app_process -Xnoimage-dex2oat / --nice-name="termux-x11 com.termux.x11 $*" com.termux.x11.Loader "$@"',
+    'exec /system/bin/app_process -Xnoimage-dex2oat / --nice-name="termux-x11 com.termux $*" com.termux.x11.Loader "$@"')
+s = s.replace('com.termux.x11.Loader', 'com.termux.x11.Loader')
+open(p, 'w').write(s)
+PYEOF
+            chmod 755 "$tmp_dir/bin/termux-x11"
+        fi
+        (cd "$tmp_dir" && \
+            zip -q -X "$zip_file" libexec/termux-x11/loader.apk bin/termux-x11)
+        rm -rf "$tmp_dir"
+        echo "[*] Injected patched termux-x11 loader + launcher into bootstrap-$arch.zip"
+    done
+else
+    echo "[!] Patched shell-loader APK not found; bootstrap keeps the stock termux-x11" >&2
+fi
+
 # The audacious-plugins package ships a PipeWire output plugin. Tuxora runs
 # PulseAudio (Android AAudio via OpenSL), and there is no PipeWire server, so
 # audacious picks the PipeWire plugin by default and fails with
