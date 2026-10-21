@@ -69,21 +69,35 @@ jobs:
             [ -n "$p" ] && [ -x "$p" ] && SDKMANAGER="$p" && break
           done
           if [ -n "$SDKMANAGER" ]; then
-            yes | "$SDKMANAGER" "build-tools;34.0.0" || true
-            yes | "$SDKMANAGER" "build-tools;33.0.2" || true
+            yes | "$SDKMANAGER" "build-tools;34.0.0" "platform-tools" || true
           fi
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
 
       - name: Sign Release APK
-        uses: r0adkll/sign-android-release@v1
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          BT=""
+          for d in "$ANDROID_SDK_ROOT/build-tools/"*; do
+            [ -d "$d" ] && [ -x "$d/apksigner" ] && BT="$d" && break
+          done
+          if [ -z "$BT" ]; then
+            echo "No apksigner found"; exit 1
+          fi
+          echo "Using $BT"
+          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n1)
+          echo "Signing $APK"
+          echo "$SIGNING_KEY" | base64 -d > /tmp/tuxora.keystore
+          "$BT/apksigner" sign --ks /tmp/tuxora.keystore --ks-key-alias "$ALIAS" --ks-pass pass:"$KEYSTORE_PASSWORD" --key-pass pass:"$KEY_PASSWORD" "$APK"
+          "$BT/apksigner" verify "$APK"
+          echo "signedReleaseFile=$APK" >> $GITHUB_OUTPUT
         id: sign_app
-        with:
-          releaseDirectory: app/build/outputs/apk/release
-          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-          alias: ${{ secrets.ALIAS }}
-          keyStorePassword: ${{ secrets.KEYSTORE_PASSWORD }}
-          keyPassword: ${{ secrets.KEY_PASSWORD }}
 
       - name: Prepare distribution artifacts
         shell: bash {0}
