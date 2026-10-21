@@ -61,6 +61,20 @@ jobs:
           export TERMUX_APK_VERSION_TAG="$APK_VERSION_TAG"
           ./gradlew --no-daemon :app:assembleRelease
 
+      - name: Setup Android build tools
+        run: |
+          ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER=""
+          for p in "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "$ANDROID_SDK_ROOT/cmdline-tools/bin/sdkmanager" "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "$(which sdkmanager 2>/dev/null)"; do
+            [ -n "$p" ] && [ -x "$p" ] && SDKMANAGER="$p" && break
+          done
+          if [ -n "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" "build-tools;34.0.0" || true
+            yes | "$SDKMANAGER" "build-tools;33.0.2" || true
+          fi
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+
       - name: Sign Release APK
         uses: r0adkll/sign-android-release@v1
         id: sign_app
