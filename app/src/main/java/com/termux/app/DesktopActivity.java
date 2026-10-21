@@ -461,10 +461,14 @@ public class DesktopActivity extends Activity {
             "# stops before hicolor and every launcher entry renders without an icon. The\n" +
             "# bundled Hybrid theme is self-contained and is what the shipped GTK settings\n" +
             "# already select. Force every launcher rasi to Hybrid so icons resolve.\n" +
-            "for f in $HOME/.config/rofi/launchers/*.rasi $HOME/.config/rofi/tuxora/launcher.rasi; do\n" +
+            "for f in $HOME/.config/rofi/launchers/*.rasi $HOME/.config/rofi/tuxora/launcher.rasi $HOME/.config/rofi/*.rasi; do\n" +
             "  [ -f \"$f\" ] || continue\n" +
-            "  sed -i 's/icon-theme:[[:space:]]*\"[^\"]*\"/icon-theme:                     \"Hybrid\"/' \"$f\"\n" +
+            "  sed -i 's/icon-theme:[[:space:]]*\"[^\"]*\"/icon-theme:                     \"Hybrid\"/g' \"$f\"\n" +
             "done\n" +
+            "# Also patch any rofi config that might set icon-theme\n" +
+            "find $HOME/.config/rofi -name '*.rasi' -o -name 'config*' 2>/dev/null | xargs grep -l 'icon-theme' 2>/dev/null | xargs -I{} sed -i 's/icon-theme:[[:space:]]*\"[^\"]*\"/icon-theme:                     \"Hybrid\"/g' {} 2>/dev/null || true\n" +
+            "echo '---APPDRAWER ICON---' >> /sdcard/desktop-diag.log 2>&1\n" +
+            "grep icon-theme $HOME/.config/rofi/launchers/Appdrawer.rasi >> /sdcard/desktop-diag.log 2>&1\n" +
             "if pgrep -f 'termux-x11 " + pkg + "' >/dev/null 2>&1; then exit 0; fi\n" +
             "setsid $PREFIX/bin/termux-x11 :0 -ac " +
             "-xstartup \"dbus-launch --exit-with-session openbox-session\" " +
