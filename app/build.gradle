@@ -65,6 +65,14 @@ android {
         // matching this version (e.g. .../releases/download/v1.1.0/bootstrap-aarch64.zip).
         buildConfigField "boolean", "TUXORA_SLIM", tuxoraSlim ? "true" : "false"
         buildConfigField "String", "TUXORA_RELEASE_BASE_URL", "\"https://github.com/Frost-bit-star/Tuxora/releases/download\""
+        // Expected SHA-256 of each per-ABI slim bootstrap, baked in at build time so the
+        // first-launch download can be verified before it is unpacked and executed. Supplied
+        // by the release workflow (it hashes the bootstraps it uploads). Empty = not pinned
+        // (the download still works, with a logged warning) so local/dev builds are unaffected.
+        buildConfigField "String", "TUXORA_BOOTSTRAP_SHA256_AARCH64", "\"" + (System.getenv("TUXORA_BOOTSTRAP_SHA256_AARCH64") ?: "") + "\""
+        buildConfigField "String", "TUXORA_BOOTSTRAP_SHA256_ARM", "\"" + (System.getenv("TUXORA_BOOTSTRAP_SHA256_ARM") ?: "") + "\""
+        buildConfigField "String", "TUXORA_BOOTSTRAP_SHA256_I686", "\"" + (System.getenv("TUXORA_BOOTSTRAP_SHA256_I686") ?: "") + "\""
+        buildConfigField "String", "TUXORA_BOOTSTRAP_SHA256_X86_64", "\"" + (System.getenv("TUXORA_BOOTSTRAP_SHA256_X86_64") ?: "") + "\""
 
         manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.termux"
         manifestPlaceholders.TERMUX_APP_NAME = tuxoraSlim ? "Tuxora Lite" : "Tuxora"

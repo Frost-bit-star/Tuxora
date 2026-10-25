@@ -24,6 +24,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.zip.ZipEntry;
@@ -239,6 +240,7 @@ public final class TuxoraSetup {
         File cache = new File(activity.getCacheDir(), "bootstrap-" + arch + ".zip");
         if (cache.exists() && cache.length() > MIN_STAGED_BYTES) {
             Log.i(LOG_TAG, "Using cached bootstrap (" + cache.length() + " bytes): " + cache.getAbsolutePath());
+            verifyBootstrap(arch, cache);
             if (progress != null) progress.onProgress(55, "Installing packages\u2026");
             return cache;
         }
@@ -246,14 +248,81 @@ public final class TuxoraSetup {
             File staged = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "bootstrap-" + arch + ".zip");
             if (staged.exists() && staged.isFile() && staged.length() > MIN_STAGED_BYTES) {
                 Log.i(LOG_TAG, "Using pre-staged bootstrap from Downloads (" + staged.length() + " bytes)");
+                // A file dropped into public Downloads is attacker-reachable, so it is held to
+                // the same pinned hash as a network download (when the build pins one).
+                verifyBootstrap(arch, staged);
                 if (progress != null) progress.onProgress(55, "Installing packages\u2026");
                 return staged;
             }
+        } catch (BootstrapVerificationException e) {
+            throw e; // a staged file that fails the pinned hash must not silently fall through
         } catch (Exception e) {
             Log.i(LOG_TAG, "No pre-staged bootstrap available: " + e);
         }
         download(url, cache, progress);
+        verifyBootstrap(arch, cache);
         return cache;
+    }
+
+    /** Thrown when a bootstrap archive does not match the SHA-256 pinned into the build. */
+    static final class BootstrapVerificationException extends Exception {
+        BootstrapVerificationException(String message) { super(message); }
+    }
+
+    /** SHA-256 pinned into this build for {@code arch}, or empty when the build did not pin one. */
+    private static String expectedBootstrapSha(String arch) {
+        switch (arch) {
+            case "aarch64": return BuildConfig.TUXORA_BOOTSTRAP_SHA256_AARCH64;
+            case "arm":     return BuildConfig.TUXORA_BOOTSTRAP_SHA256_ARM;
+            case "i686":    return BuildConfig.TUXORA_BOOTSTRAP_SHA256_I686;
+            case "x86_64":  return BuildConfig.TUXORA_BOOTSTRAP_SHA256_X86_64;
+            default:        return "";
+        }
+    }
+
+    /**
+     * Verifies a bootstrap archive against the SHA-256 pinned into the build before it is
+     * unpacked and executed. If the build pins no hash for this ABI (e.g. a local dev build),
+     * it logs a warning and allows it, so behaviour is unchanged for unpinned builds. A pinned
+     * mismatch deletes the file and aborts setup rather than installing untrusted code.
+     */
+    private static void verifyBootstrap(String arch, File file) throws Exception {
+        String expected = expectedBootstrapSha(arch);
+        if (expected == null || expected.isEmpty()) {
+            Log.w(LOG_TAG, "No pinned SHA-256 for bootstrap-" + arch + "; skipping integrity check");
+            return;
+        }
+        String actual = sha256(file);
+        if (!constantTimeEquals(expected.toLowerCase(), actual)) {
+            //noinspection ResultOfMethodCallIgnored
+            file.delete();
+            throw new BootstrapVerificationException(
+                "bootstrap-" + arch + ".zip failed integrity check (expected " + expected
+                    + ", got " + actual + "). Refusing to install.");
+        }
+        Log.i(LOG_TAG, "Bootstrap SHA-256 verified for " + arch);
+    }
+
+    private static String sha256(File file) throws Exception {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] buffer = new byte[262144];
+        try (InputStream in = new java.io.FileInputStream(file)) {
+            int read;
+            while ((read = in.read(buffer)) != -1) digest.update(buffer, 0, read);
+        }
+        StringBuilder sb = new StringBuilder(64);
+        for (byte b : digest.digest()) sb.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        return sb.toString();
+    }
+
+    /** Length-aware constant-time string compare (avoids leaking the hash via timing). */
+    private static boolean constantTimeEquals(String a, String b) {
+        if (a == null || b == null) return false;
+        byte[] x = a.getBytes(StandardCharsets.UTF_8);
+        byte[] y = b.getBytes(StandardCharsets.UTF_8);
+        int diff = x.length ^ y.length;
+        for (int i = 0; i < x.length && i < y.length; i++) diff |= x[i] ^ y[i];
+        return diff == 0;
     }
 
     private static void download(String urlString, File out, TermuxInstaller.InstallProgress progress) throws Exception {
