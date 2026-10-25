@@ -22,6 +22,12 @@ local.properties
 
 # Signing files
 .signing/
+# Release signing - never commit a real signing key or its passwords.
+# The bundled app/testkey_untrusted.jks is intentionally tracked (debug fallback only).
+/app/keystore.properties
+/app/release.jks
+/app/release.keystore
+/app/*.keystore
 
 # Intellij
 .idea/

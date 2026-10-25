@@ -104,12 +104,31 @@ android {
         }
     }
 
+    // A real release key is used when one is provided - either via env vars (CI secrets)
+    // or a local app/keystore.properties - otherwise the build falls back to the bundled
+    // debug key so existing CI keeps producing installable APKs with no secret configured.
+    // keystore.properties and real *.jks keys are git-ignored: never commit a signing key.
+    def envKeystore = System.getenv("TUXORA_KEYSTORE_FILE")
+    def keystorePropsFile = file("keystore.properties")
+    def keystoreProps = new Properties()
+    if (keystorePropsFile.exists()) keystoreProps.load(new FileInputStream(keystorePropsFile))
+    def hasReleaseKey = (envKeystore != null && !envKeystore.isEmpty()) || keystorePropsFile.exists()
+
     signingConfigs {
         debug {
             storeFile file('testkey_untrusted.jks')
             keyAlias 'alias'
             storePassword 'xrj45yWGLbsO7W0v'
             keyPassword 'xrj45yWGLbsO7W0v'
+        }
+        release {
+            if (hasReleaseKey) {
+                def ksPath = envKeystore ?: keystoreProps.getProperty("storeFile")
+                if (ksPath) storeFile file(ksPath)
+                storePassword System.getenv("TUXORA_KEYSTORE_PASSWORD") ?: keystoreProps.getProperty("storePassword")
+                keyAlias System.getenv("TUXORA_KEY_ALIAS") ?: keystoreProps.getProperty("keyAlias")
+                keyPassword System.getenv("TUXORA_KEY_PASSWORD") ?: keystoreProps.getProperty("keyPassword")
+            }
         }
     }
 
@@ -118,8 +137,10 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
-            // Signed with the bundled debug key (no secret needed in CI).
-            signingConfig signingConfigs.debug
+            // Use the real release key when configured (env / keystore.properties); otherwise
+            // fall back to the bundled debug key so current CI keeps working unchanged.
+            signingConfig hasReleaseKey ? signingConfigs.release : signingConfigs.debug
+            if (hasReleaseKey) logger.quiet("Tuxora: release build will be signed with the configured release key")
         }
 
         debug {
