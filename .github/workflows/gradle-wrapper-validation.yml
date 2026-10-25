@@ -3,11 +3,11 @@ name: "Validate Gradle Wrapper"
 on:
   push:
     branches:
-      - master
+      - main
       - android-10
   pull_request:
     branches:
-      - master
+      - main
       - android-10
   workflow_dispatch:
 
