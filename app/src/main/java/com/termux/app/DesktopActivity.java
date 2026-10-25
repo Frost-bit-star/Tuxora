@@ -156,9 +156,30 @@ public class DesktopActivity extends Activity {
         if (hasPassword) {
             passwordRow.setVisibility(View.VISIBLE);
             signupColumn.setVisibility(View.GONE);
+            maybeOfferBiometric();
         } else {
             passwordRow.setVisibility(View.GONE);
             signupColumn.setVisibility(View.VISIBLE);
+        }
+    }
+
+    // ------------------------------------------------------------------ biometric
+
+    private static final String AUTH_PREFS = "tuxora_auth";
+    private static final String KEY_BIOMETRIC = "biometric_unlock";
+
+    private boolean biometricEnabled() {
+        return getSharedPreferences(AUTH_PREFS, MODE_PRIVATE).getBoolean(KEY_BIOMETRIC, false);
+    }
+
+    private void setBiometricEnabled(boolean enabled) {
+        getSharedPreferences(AUTH_PREFS, MODE_PRIVATE).edit().putBoolean(KEY_BIOMETRIC, enabled).apply();
+    }
+
+    /** When enabled and available, show the fingerprint prompt; the password stays as fallback. */
+    private void maybeOfferBiometric() {
+        if (biometricEnabled() && BiometricGate.isAvailable(this)) {
+            BiometricGate.prompt(this, this::bootDesktop, () -> { /* stay on the password field */ });
         }
     }
 
@@ -220,6 +241,14 @@ public class DesktopActivity extends Activity {
                 signupButton.setEnabled(true);
                 switch (r) {
                     case OK:
+                        // First successful password login on a device with an enrolled
+                        // biometric: enable fingerprint unlock for next time (password stays
+                        // as the fallback). Opt-out is a future settings toggle.
+                        if (!biometricEnabled() && BiometricGate.isAvailable(this)) {
+                            setBiometricEnabled(true);
+                            Toast.makeText(this, "Fingerprint unlock enabled for next time",
+                                Toast.LENGTH_SHORT).show();
+                        }
                         bootDesktop();
                         break;
                     case WRONG:
