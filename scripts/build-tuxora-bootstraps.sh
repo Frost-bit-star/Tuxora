@@ -173,6 +173,29 @@ for arch in $(echo "$ARCHS" | tr ',' ' '); do
     fi
 done
 
+# Make the Android AAudio sink the default PulseAudio output so sound works on first
+# boot. The stock default.pa loads the SLES sink and leaves AAudio commented out; on many
+# devices SLES falls back to a silent dummy sink (auto_null), which is why audio is silent
+# until the user edits default.pa by hand (see README troubleshooting). Flip it at build
+# time: disable the SLES sink and enable the AAudio one.
+for arch in $(echo "$ARCHS" | tr ',' ' '); do
+    zip_file="$BUILD_DIR/bootstrap-$arch.zip"
+    [ -f "$zip_file" ] || continue
+    entry="etc/pulse/default.pa"
+    if unzip -Z1 "$zip_file" 2>/dev/null | grep -qx "$entry"; then
+        tmp_dir="$(mktemp -d)"
+        if (cd "$tmp_dir" && unzip -q -o "$zip_file" "$entry" \
+                && sed -i 's|^load-module module-sles-sink|#load-module module-sles-sink|' "$entry" \
+                && sed -i 's|^#\s*load-module module-aaudio-sink|load-module module-aaudio-sink|' "$entry" \
+                && zip -q "$zip_file" "$entry"); then
+            echo "[*] Set AAudio as the default PulseAudio sink in bootstrap-$arch.zip"
+        else
+            echo "[!] Could not adjust default.pa in bootstrap-$arch.zip (leaving stock)" >&2
+        fi
+        rm -rf "$tmp_dir"
+    fi
+done
+
 echo "[*] Copying archives to $OUT_DIR ..."
 mkdir -p "$OUT_DIR"
 for arch in $(echo "$ARCHS" | tr ',' ' '); do
